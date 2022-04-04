@@ -215,7 +215,7 @@ fz_DEF void fz__vec_sort(void *array, size_t element_size, fz_COMPARATOR_FUNC co
 
 // Internals
 #define _FV_GROW(arr, sz)  (fz__vec_grow((void **)&(arr), fz_Vec_Header(arr), sizeof(arr[0]), sz))
-#define _FV_MAYBEGROW(arr, sz) ((arr) && (fz_Vec_Length(arr) + sz >= fz_Vec_Capacity(arr)) \
+#define _FV_MAYBEGROW(arr, sz) ((arr) && (fz_Vec_Length(arr) == fz_Vec_Capacity(arr)) \
                                ? _FV_GROW(arr, sz) : 0)
 
 #define fz_Vec_CreateEx(type, caps, allocator) (type *)fz__vec_create(sizeof(type), (caps), (allocator))
@@ -226,7 +226,7 @@ fz_DEF void fz__vec_sort(void *array, size_t element_size, fz_COMPARATOR_FUNC co
 #define fz_Vec_Pop(array)                      ((fz_Vec_Header(array)->used--), ((array)[fz_Vec_Header(array)->used]))
 #define fz_Vec_Clear(array)                    ((array) ? ((fz_Vec_Header(array)->used = 0), 1) : 0)
 #define fz_Vec_Last(array)                     (array)[fz_Vec_Header(array)->used - 1]
-#define fz_Vec_Remove_Ordered(arr, i)          (memmove(&(arr)[i], &(arr)[i + 1], sizeof(arr[0]) * (fz_Vec_Length(arr) - i)), fz_Vec_Header(arr)->used -= i)
+#define fz_Vec_Remove_Ordered(arr, i)          (memmove(&(arr)[i], &(arr)[i + 1], sizeof(arr[0]) * (fz_Vec_Length(arr) - i)), fz_Vec_Header(arr)->used -= 1)
 #define fz_Vec_Remove_Unordered(arr, i)        (arr[i] = fz_Vec_Pop(arr))
 #define fz_Vec_Sort(array, comparator_func)    ((array) ? fz__vec_sort((void *)(array), sizeof(array[0]), (comparator_func)) : (void)0)
 
