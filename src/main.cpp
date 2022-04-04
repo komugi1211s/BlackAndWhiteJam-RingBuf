@@ -8,7 +8,7 @@ enum
 {
     ACTION_NONE = 0,
     ACTION_ATTACK,
-    ACTION_BLOCK,
+    ACTION_DEFEND,
     ACTION_PARRY,
     ACTION_RUSH,
     ACTION_COUNT,
@@ -19,12 +19,12 @@ struct Action {
     int jump_to;
 };
 
+#define ACTION_CAPACITY 10
 #define TILE 96
-#define PLAYER_ACTION_CAPACITY 10
 
 const Action base_actions[] = {
     { ACTION_ATTACK, 0 },
-    { ACTION_BLOCK,  0 },
+    { ACTION_DEFEND,  0 },
     { ACTION_PARRY,  0 },
     { ACTION_RUSH,   0 },
 };
@@ -55,6 +55,8 @@ int pixsort(const void *a, const void *b) {
  *   P        R        P
  * [ A, D, D, P, D, A, R, A, A, P ]
  *
+ * [ D, A, A, A, D ]
+ *
 */
 
 /* Constants */
@@ -65,7 +67,10 @@ static Rectangle window_size = { 0, 0, 800, 600 };
 static float accumulator = 0;
 static Vector2 mouse_pos = {};
 
-static Vec(Action) action;
+
+static Vec(Action) action_queue;
+static int execute_action_queue = 0;
+static int global_action_index = 0;
 
 /* Renderer globals */
 static int time_loc     = -1;
@@ -88,6 +93,7 @@ enum
     RIGHT,
 };
 
+
 Vector2 position_of_pivot(Rectangle rect, int y_axis, int x_axis) {
     Vector2 result = {};
 
@@ -100,9 +106,9 @@ Vector2 position_of_pivot(Rectangle rect, int y_axis, int x_axis) {
     }
 
     switch(x_axis) {
-        case LEFT:   result.x = rect.x;                    break;
-        case CENTER: result.x = rect.x + (rect.width / 2); break;
-        case RIGHT:  result.x = rect.x + rect.width;       break;
+        case LEFT:   result.x = rect.x;                     break;
+        case CENTER: result.x = rect.x + (rect.width / 2);  break;
+        case RIGHT:  result.x = rect.x + rect.width;        break;
 
         default: assert(0);
     }
@@ -124,10 +130,10 @@ Rectangle get_available_action_layout(void) {
 
 Rectangle get_action_queue_layout(void) {
     Rectangle queued_layout = {};
-    queued_layout.width  = PLAYER_ACTION_CAPACITY * (TILE - 8);
+    queued_layout.width  = ACTION_CAPACITY * (TILE - 8);
     queued_layout.height = (TILE - 8);
 
-    queued_layout.x = render_tex.texture.width * 0.5  - (PLAYER_ACTION_CAPACITY * TILE / 2);
+    queued_layout.x = render_tex.texture.width * 0.5  - (ACTION_CAPACITY * TILE / 2);
     queued_layout.y = render_tex.texture.height * 0.75 - (queued_layout.height / 2);
 
     return queued_layout;
@@ -148,12 +154,12 @@ void update(float dt) {
     if (accumulator < 0)       accumulator = 0;
 
     Vector2 screen_pos = GetMousePosition();
-    mouse_pos = { screen_pos.x * 2, screen_pos.y * 2 };
+    mouse_pos = { screen_pos.x * 2.0f, screen_pos.y * 2.0f };
 
     /* animate tweens */
     for (int i = 0; i < fz_COUNTOF(slot_strength); ++i) {
         float target      = slot_strength_target[i];
-        slot_strength[i] += (target - slot_strength[i]) * 0.010;
+        slot_strength[i] += (target - slot_strength[i]) * 0.02;
     }
 
     /* Update available action / push scheme */
@@ -173,8 +179,9 @@ void update(float dt) {
 
         if (selected != -1 && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
             Action a = base_actions[selected];
-            if (VecLen(action) < VecCap(action)) {
-                VecPush(action, a);
+
+            if (VecLen(action_queue) < VecCap(action_queue)) {
+                VecPush(action_queue, a);
             }
         }
     }
@@ -183,13 +190,15 @@ void update(float dt) {
 
     {
         Rectangle queued_layout = get_action_queue_layout();
-        size_t queue_length = VecLen(action);
+        size_t queue_length = VecLen(action_queue);
 
         for (int i = 0; i < queue_length; ++i) {
             Rectangle r = get_rowslot_for_nth_tile(queued_layout, i, 8);
 
-            if (CheckCollisionPointRec(mouse_pos, r) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                VecRemoveN(action, i);
+            if (CheckCollisionPointRec(mouse_pos, r) &&
+                IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+            {
+                VecRemoveN(action_queue, i);
             }
         }
     }
@@ -197,6 +206,7 @@ void update(float dt) {
 
 void render(void) {
     BeginTextureMode(render_tex);
+
     ClearBackground(BLACK);
     {
         SetShaderValue(shader, time_loc, &accumulator, SHADER_UNIFORM_FLOAT);
@@ -205,11 +215,10 @@ void render(void) {
         Rectangle player = {};
         player.width  = 1 * TILE;
         player.height = 2 * TILE;
-        player.x = render_tex.texture.width * 0.25 - (player.width / 2);
-        player.y = render_tex.texture.height * 0.5  - (player.height / 2);
+        player.x = render_tex.texture.width * 0.25 - (player.width  / 2);
+        player.y = render_tex.texture.height * 0.5 - (player.height / 2);
 
         DrawRectangleRec(player, WHITE);
-
         Rectangle layout = get_available_action_layout();
 
         /*
@@ -224,7 +233,10 @@ void render(void) {
             chara[1] = '\0';
 
             float w = MeasureTextEx(font, chara, TILE, 0).x;
-            Vector2 pos = { r.x + r.width / 2 - w / 2, r.y };
+
+            Vector2 pos = position_of_pivot(r, MIDDLE, CENTER);
+            pos.x -= w / 2;
+
             DrawTextEx(font, chara, pos, TILE, 0, WHITE);
 
             BeginShaderMode(shader);
@@ -241,12 +253,12 @@ void render(void) {
          */
         Rectangle queued_layout = get_action_queue_layout();
 
-        for (int i = 0; i < VecCap(action); ++i) {
-            if (i >= VecLen(action)) BeginShaderMode(shader);
+        for (int i = 0; i < VecCap(action_queue); ++i) {
+            if (i >= VecLen(action_queue)) BeginShaderMode(shader);
             Rectangle r = get_rowslot_for_nth_tile(queued_layout, i, 8);
 
-            if (i < VecLen(action)) {
-                Action a = action[i];
+            if (i < VecLen(action_queue)) {
+                Action a = action_queue[i];
 
                 if (a.type == ACTION_PARRY) {
                     int jump_to = a.jump_to;
@@ -273,27 +285,29 @@ void render(void) {
             }
 
             DrawRectangleLinesEx(r, 1, WHITE);
-            if (i >= VecLen(action)) EndShaderMode();
+            if (i >= VecLen(action_queue)) EndShaderMode();
         }
 
 
-        const char *format = TextFormat("%d / %d", (int)VecLen(action), (int)VecCap(action));
+        const char *format = TextFormat("%d / %d", (int)VecLen(action_queue), (int)VecCap(action_queue));
         float w = MeasureText(format, 18);
-        DrawText(format, queued_layout.x + (VecCap(action) * TILE * 0.5) - (w * 0.5), queued_layout.y - 18 - 2, 18, WHITE);
+        DrawText(format, queued_layout.x + (VecCap(action_queue) * TILE * 0.5) - (w * 0.5), queued_layout.y - 18 - 2, 18, WHITE);
     }
+
+    EndTextureMode();
 }
 
 int main(void) {
     window_size = { 0, 0, 800, 600 };
     InitWindow(window_size.width, window_size.height, "MainWindow");
 
-    action = VecCreate(Action, PLAYER_ACTION_CAPACITY);
+    action_queue = VecCreate(Action, ACTION_CAPACITY);
     shader = LoadShaderFromMemory(0, fragment_shader_for_invisibility);
     font = LoadFontEx("assets/fonts/EBGaramond-Regular.ttf", TILE, 0, 0);
     time_loc     = GetShaderLocation(shader, "fTime");
     strength_loc = GetShaderLocation(shader, "fStrength");
 
-    Rectangle render_rect = { 0, 0, window_size.width * 2, window_size.height * 2 };
+    Rectangle render_rect = { 0, 0, window_size.width * 2.0f, window_size.height * 2.0f };
 
     render_tex = LoadRenderTexture(render_rect.width, render_rect.height);
     SetTextureFilter(render_tex.texture, TEXTURE_FILTER_BILINEAR);
@@ -310,32 +324,19 @@ int main(void) {
         update(dtime);
         render();
 
-        Rectangle buf;
-
-            const char *format = TextFormat("%d / %d", (int)VecLen(action), (int)VecCap(action));
-            float w = MeasureText(format, 18);
-            DrawText(format, buf.x + (VecCap(action) * TILE * 0.5) - (w * 0.5), buf.y - 18 - 2, 18, WHITE);
-
-            float inactive_strength = 0.25;
-            SetShaderValue(shader, strength_loc, &inactive_strength, SHADER_UNIFORM_FLOAT);
-
-
-        EndTextureMode();
-
         BeginDrawing();
         ClearBackground(BLACK);
-
-        Rectangle swapped = render_rect;
-        swapped.height *= -1;
-        Vector2 offset = {};
-        DrawTexturePro(render_tex.texture, swapped, window_size, offset, 0, WHITE);
+            Rectangle swapped = render_rect;
+            swapped.height *= -1;
+            Vector2 offset = {};
+            DrawTexturePro(render_tex.texture, swapped, window_size, offset, 0, WHITE);
         EndDrawing();
     }
 
     UnloadFont(font);
     UnloadRenderTexture(render_tex);
     UnloadShader(shader);
-    VecRelease(action);
+    VecRelease(action_queue);
     CloseWindow();
     return 0;
 }
