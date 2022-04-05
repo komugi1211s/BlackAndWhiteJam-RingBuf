@@ -1,0 +1,16 @@
+
+slash:  blocked by parry, allows damage through tackle/evade, deals 1 damage
+evade:  effective against tackle
+tackle: blocked by evade, allows damage through slash/parry, deals 1 damage
+parry:  effective against slash
+
+slash -> block
+  +        |
+  |        +
+evade <- tackle
+
+enemy1: [slash,  parry, tackle, parry]
+enemy2: [block,  evade, parry,  parry]
+enemy3: [tackle, slash, evade,  evade]
+
+create minimal action ring buffer possible by choosing 4 action.
