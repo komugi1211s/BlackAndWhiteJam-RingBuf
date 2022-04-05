@@ -44,6 +44,15 @@ const char fragment_shader_for_invisibility[] = "#version 330\n"
 "float noise(vec2 n) { return mix(rand(n), rand(n + 1), 0.2); }\n"
 "void main() { float n = step(noise(fragTexCoord + fTime), fStrength * texture(texture0, fragTexCoord).a); finalColor = vec4(n, n, n, 1.0f); } \n";
 
+const char fragment_for_dithering[] = "#version 330\n"
+"in vec2 fragTexCoord; in vec4 fragColor; \n"
+"uniform sampler2D texture0; uniform vec4 colDiffuse;\n"
+"uniform vec2 res; \n"
+"out vec4 finalColor; \n"
+"mat4 bayer = mat4(15,135,45,165,195,75,225,105,60,180,30,150,240,120,210,90);\n"
+"void main() { vec4 t = texture(texture0, fragTexCoord) * colDiffuse * fragColor; float b = 0.299*t.r + 0.587*t.g + 0.114*t.b;\n"
+" int x = int(fragTexCoord.x*res.x)%4; int y = int(fragTexCoord.y*res.y)%4; float th = bayer[y][x] / 255.0f; float c = ceil(b - th); finalColor=vec4(c,c,c,t.a); } \n";
+
 
 /*
  *   Solution for stage 1:
