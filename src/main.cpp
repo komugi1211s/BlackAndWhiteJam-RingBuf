@@ -23,6 +23,8 @@ struct Action {
 #define ACTION_CAPACITY 10
 #define TILE 96
 
+static Texture2D action_textures[ACTION_COUNT];
+
 const Action base_actions[] = {
     { ACTION_SLASH,  0 },
     { ACTION_EVADE,  0 },
@@ -292,7 +294,7 @@ void update(Game *game, float dt) {
     /* animate tweens */
     for (int i = 0; i < fz_COUNTOF(slot_strength); ++i) {
         float target      = slot_strength_target[i];
-        slot_strength[i] += (target - slot_strength[i]) * dt;
+        slot_strength[i] += (target - slot_strength[i]) * 0.05;
     }
 
     /*
@@ -363,6 +365,16 @@ void update(Game *game, float dt) {
         }
     }
 }
+
+void draw_texture_sane(Texture2D tex, Rectangle target) {
+    Rectangle src = { 0.0f, 0.0f, (float)tex.width, (float)tex.height };
+    
+    Vector2 origin = {0};
+    float   rotation = 0;
+
+    DrawTexturePro(tex, src, target, origin, rotation, WHITE);
+}
+
 
 void render_healthbar(Actor *actor, Rectangle actor_rect) {
     /* render health of player. */
@@ -447,25 +459,24 @@ void render(Game *game) {
         /*
          * Render Base Actions
          **/
+        BeginShaderMode(shader);
         for (int i = 0; i < fz_COUNTOF(base_actions); ++i) {
             Action a = base_actions[i];
-            Rectangle r = get_rowslot_for_nth_tile(layout, i, 0);
 
-            char chara[2];
-            chara[0] = '0' + a.type;
-            chara[1] = '\0';
+            Texture2D tex = action_textures[a.type];
+            Rectangle dest = get_rowslot_for_nth_tile(layout, i, 0);
+            Rectangle texdest = dest;
+            texdest.x += 1;
+            texdest.y += 1;
+            texdest.width -= 2;
+            texdest.height -= 2;
 
-            float w = MeasureTextEx(font, chara, TILE, 0).x;
-            Vector2 pos = position_of_pivot(r, MIDDLE, CENTER);
-            pos.x -= w / 2;
-
-            DrawTextEx(font, chara, pos, TILE, 0, WHITE);
-
-            BeginShaderMode(shader);
             SetShaderValue(shader, strength_loc, &slot_strength[i], SHADER_UNIFORM_FLOAT);
-            DrawRectangleLinesEx(r, 1, WHITE);
-            EndShaderMode();
+
+            draw_texture_sane(tex, texdest);
+            DrawRectangleLinesEx(dest, 1, WHITE);
         }
+        EndShaderMode();
 
         /* Reset shader options */
         SetShaderValue(shader, strength_loc, &BASE_SHADER_EFFECT_THRESHOLD, SHADER_UNIFORM_FLOAT);
@@ -530,6 +541,11 @@ int main(void) {
     Game game = {0};
     DEBUG_createphase(&game);
 
+    action_textures[ACTION_TACKLE] = LoadTexture("assets/icons/shield-bash.png");
+    action_textures[ACTION_PARRY]  = LoadTexture("assets/icons/sword-break.png");
+    action_textures[ACTION_EVADE]  = LoadTexture("assets/icons/wingfoot.png");
+    action_textures[ACTION_SLASH]  = LoadTexture("assets/icons/spinning-sword.png");
+
     while(!WindowShouldClose()) {
         float dtime  = GetFrameTime();
         accumulator += dtime;
@@ -545,6 +561,11 @@ int main(void) {
             DrawTexturePro(render_tex.texture, swapped, window_size, offset, 0, WHITE);
         EndDrawing();
     }
+
+    UnloadTexture(action_textures[ACTION_TACKLE]);
+    UnloadTexture(action_textures[ACTION_PARRY]);
+    UnloadTexture(action_textures[ACTION_EVADE]);
+    UnloadTexture(action_textures[ACTION_SLASH]);
 
     UnloadFont(font);
     UnloadRenderTexture(render_tex);
