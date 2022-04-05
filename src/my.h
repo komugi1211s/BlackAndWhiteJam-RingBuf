@@ -573,6 +573,7 @@ fz_OPER_FUNC(fz_heap_operation) {
         case fz_MEMORY_OPER_REALLOCATE:
             return fz_platform_realloc(ptr, size);
     }
+    return NULL;
 }
 
 fz_Allocator fz_heap_allocator() {

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #define FUZZY_MY_H_IMPL
+#define fz_NO_WINDOWS_H
 #include "my.h"
 
 enum
@@ -22,8 +23,6 @@ struct Action {
 
 #define ACTION_CAPACITY 10
 #define TILE 96
-
-static Texture2D action_textures[ACTION_COUNT];
 
 const Action base_actions[] = {
     { ACTION_SLASH,  0 },
@@ -89,15 +88,12 @@ struct Actor {
     Action actions[ACTION_CAPACITY];
 };
 
-#define ENEMY_CAPACITY 3
-struct Game {
-    int prev_phase;
-
-    int player_act;
-    Actor player;
-
-    int enemy_idx;
-    Actor enemies[ENEMY_CAPACITY];  
+enum /* Core scene phase */
+{
+    TITLE_SCREEN,
+    STAGE_SELECT,
+    STAGE_LOADING,
+    GAME_IN_PROGRESS,
 };
 
 enum /* Combat State */
@@ -106,6 +102,73 @@ enum /* Combat State */
     COMBAT_ENEMY_WON,
     COMBAT_PLAYER_CONQUERED,
     COMBAT_IN_PROGRESS,
+};
+
+enum /* Asset state */
+{
+    ASSET_NONE,
+    ASSET_BACKGROUND,
+
+    /* Player / Animations */
+    ASSET_PLAYER_BEGIN,
+    ASSET_PLAYER_RESTING,
+    ASSET_PLAYER_WALKING,
+    ASSET_PLAYER_PLANNING,
+    ASSET_PLAYER_ATTACK,
+    ASSET_PLAYER_EVADE,
+    ASSET_PLAYER_BLOCKING,
+    ASSET_PLAYER_TACKLING,
+    ASSET_PLAYER_INJURED,
+    ASSET_PLAYER_DYING,
+    ASSET_PLAYER_END,
+
+    /* Skill Icons */
+    ASSET_ACTION_ICON_BEGIN,
+    ASSET_ACTION_ICON_SLASH,
+    ASSET_ACTION_ICON_EVADE,
+    ASSET_ACTION_ICON_PARRY,
+    ASSET_ACTION_ICON_TACKLE,
+    ASSET_ACTION_ICON_END,
+    
+    ASSET_STATE_COUNT,
+};
+
+struct Tex2DWrapper { /* Wrapper for Texture2D -- to really know if the assets are actually loaded. */
+    int is_loaded;
+    Texture2D t;
+};
+
+Tex2DWrapper art_assets[ASSET_STATE_COUNT];
+int player_animation_states[ASSET_PLAYER_END - ASSET_PLAYER_BEGIN];
+
+int load_tex_to_id(int position, char *tex) {
+    assert(position >= 0 && position < ASSET_STATE_COUNT);
+    
+    Tex2DWrapper *wrapper = &art_assets[position];
+    if (wrapper->is_loaded) {
+        UnloadTexture(wrapper->t);
+        wrapper->is_loaded = 0;
+    }
+
+    Texture2D loaded = LoadTexture(tex);
+    if (loaded.id != 0) {
+        wrapper->t = loaded;
+        wrapper->is_loaded = 1;
+        return 1;    
+    }
+
+    return 0;
+}
+
+#define ENEMY_CAPACITY 3
+struct Game {
+    int core_state;
+
+    int player_act;
+    Actor player;
+
+    int enemy_idx;
+    Actor enemies[ENEMY_CAPACITY];  
 };
 
 /* Layouting */
@@ -120,7 +183,9 @@ enum
 };
 
 void DEBUG_createphase(Game *game) {
-    game->player.health = 3;
+    game->core_state = TITLE_SCREEN;
+
+    game->player.health     = 3;
     game->player.max_health = 3;
 
     game->player.action_index = 0;
@@ -409,6 +474,29 @@ void render_healthbar(Actor *actor, Rectangle actor_rect) {
 void render(Game *game) {
     BeginTextureMode(render_tex);
     ClearBackground(BLACK);
+    
+    switch(game->core_state) {
+        case TITLE_SCREEN:
+        {
+        } break;
+
+        case STAGE_SELECT:
+        {
+
+        } break;
+
+        case STAGE_LOADING:
+        {
+
+        } break;
+
+        case GAME_IN_PROGRESS:
+        {
+
+        } break;
+    }
+
+
     {
         /* TODO: DONT SET THE SHADER HERE!!?!?!? */
         SetShaderValue(shader, time_loc, &accumulator, SHADER_UNIFORM_FLOAT);
@@ -472,7 +560,7 @@ void render(Game *game) {
         for (int i = 0; i < fz_COUNTOF(base_actions); ++i) {
             Action a = base_actions[i];
 
-            Texture2D tex = action_textures[a.type];
+            Texture2D tex = art_assets[ASSET_ACTION_ICON_BEGIN + a.type].t;
             Rectangle dest = get_rowslot_for_nth_tile(layout, i, 0);
             Rectangle texdest = dest;
             texdest.x += 1;
@@ -550,10 +638,10 @@ int main(void) {
     Game game = {0};
     DEBUG_createphase(&game);
 
-    action_textures[ACTION_TACKLE] = LoadTexture("assets/icons/shield-bash.png");
-    action_textures[ACTION_PARRY]  = LoadTexture("assets/icons/sword-break.png");
-    action_textures[ACTION_EVADE]  = LoadTexture("assets/icons/wingfoot.png");
-    action_textures[ACTION_SLASH]  = LoadTexture("assets/icons/spinning-sword.png");
+    load_tex_to_id(ASSET_ACTION_ICON_SLASH,  "assets/icons/spinning-sword.png");
+    load_tex_to_id(ASSET_ACTION_ICON_EVADE,  "assets/icons/wingfoot.png");
+    load_tex_to_id(ASSET_ACTION_ICON_PARRY,  "assets/icons/sword-break.png");
+    load_tex_to_id(ASSET_ACTION_ICON_TACKLE, "assets/icons/shield-bash.png");
 
     while(!WindowShouldClose()) {
         float dtime  = GetFrameTime();
@@ -571,10 +659,10 @@ int main(void) {
         EndDrawing();
     }
 
-    UnloadTexture(action_textures[ACTION_TACKLE]);
-    UnloadTexture(action_textures[ACTION_PARRY]);
-    UnloadTexture(action_textures[ACTION_EVADE]);
-    UnloadTexture(action_textures[ACTION_SLASH]);
+    for (int i = 0; i < ASSET_STATE_COUNT; ++i) {
+        if (art_assets[i].is_loaded)
+            UnloadTexture(art_assets[i].t);
+    }
 
     UnloadFont(font);
     UnloadRenderTexture(render_tex);
