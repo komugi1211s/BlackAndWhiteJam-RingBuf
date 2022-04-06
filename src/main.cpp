@@ -142,7 +142,7 @@ int load_sound_to_id(int position, const char *asset_name) {
     Sound sound = LoadSound(asset_name);
     if (sound.stream.buffer != 0) {
         wrapper->sound = sound;
-        wrapper->is_loaded;
+        wrapper->is_loaded = 1;
         return 1;
     }
     return 0;
@@ -194,6 +194,7 @@ struct Actor {
     EVENT(NONE)             \
     EVENT(PLAY_SOUND)       \
     EVENT(TRANSITION_STATE) \
+    EVENT(BEGIN_GAME_STAGE) \
 
 #define EVENT(ev) fz_CONCAT(EVENT_, ev),
 enum
@@ -208,21 +209,10 @@ const char *event_name[] = {
 };
 #undef EVENT
 
-struct Event {
-    int   type;
-    float time;
-
-    union {
-        struct { /* Transition State */
-            int transition_to;
-        };
-
-        struct { /* Play Sound */
-            int sound_asset_id;
-        };
-    };
+struct Enemy_Chain {
+    int   enemy_count;
+    Actor enemies[ENEMY_CAPACITY];
 };
-
 
 struct Game {
     int core_state;
@@ -234,12 +224,9 @@ struct Game {
     int player_act;
     Actor player;
 
-    int enemy_idx;
-    Actor enemies[ENEMY_CAPACITY];
-
-    float      event_delay;
-    int        last_event_type;
-    Vec(Event) event_queue;
+    int enemy_index;
+    int chain_index;
+    Vec(Enemy_Chain) enemies;
 };
 
 uint32_t hash(const char *c) {
@@ -324,7 +311,7 @@ Vector2 position_of_pivot(Rectangle rect, int y_axis, int x_axis) {
 /*
     Align position of text specified by pivot.
 */
-Vector2 align_text_by(Vector2 pos, char *text, int y_align, int x_align, float font_size) {
+Vector2 align_text_by(Vector2 pos, const char *text, int y_align, int x_align, float font_size) {
     Vector2 size = MeasureTextEx(font, text, font_size, 0);
     return position_of_pivot(
         rectv2(pos, Vector2Negate(size)),
@@ -369,38 +356,33 @@ Rectangle get_rowslot_for_nth_tile(Rectangle layout, int index, int margin) {
 /* ============================================================
  * Debug scenes / states.
  */
-void DEBUG_createphase(Game *game) {
-    game->core_state = TITLE_SCREEN;
 
-    game->player.health     = 3;
-    game->player.max_health = 3;
+void load_stage_one(Game *game) {
+    VecClear(game->enemies);
+    Enemy_Chain chain = {0};
 
-    game->player.action_index = 0;
-    game->player.action_count = 0;
-    memset(game->player.actions, 0, sizeof(Action) * ACTION_CAPACITY);
+    /* First wave */
+    chain.enemies[0].health = chain.enemies[0].max_health = 3;
+    chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_SLASH;
+    chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_PARRY;
+    chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_TACKLE;
+    chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_PARRY;
 
-    game->enemies[0].health = game->enemies[0].max_health = 3;
-    game->enemies[1].health = game->enemies[1].max_health = 3;
-    game->enemies[2].health = game->enemies[2].max_health = 3;
+    chain.enemy_count++;
+    chain.enemies[1].health = chain.enemies[1].max_health = 3;
+    chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_EVADE;
+    chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_SLASH;
+    chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_PARRY;
+    chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_PARRY;
 
-    game->enemies[0].action_index = game->enemies[0].action_count = 0;
-    game->enemies[1].action_index = game->enemies[1].action_count = 0;
-    game->enemies[2].action_index = game->enemies[2].action_count = 0;
+    chain.enemy_count++;
+    chain.enemies[2].health = chain.enemies[2].max_health = 3;
+    chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_TACKLE;
+    chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_SLASH;
+    chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_EVADE;
+    chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_EVADE;
 
-    game->enemies[0].actions[game->enemies[0].action_count++].type = ACTION_SLASH;
-    game->enemies[0].actions[game->enemies[0].action_count++].type = ACTION_PARRY;
-    game->enemies[0].actions[game->enemies[0].action_count++].type = ACTION_TACKLE;
-    game->enemies[0].actions[game->enemies[0].action_count++].type = ACTION_PARRY;
-
-    game->enemies[1].actions[game->enemies[1].action_count++].type = ACTION_EVADE;
-    game->enemies[1].actions[game->enemies[1].action_count++].type = ACTION_SLASH;
-    game->enemies[1].actions[game->enemies[1].action_count++].type = ACTION_PARRY;
-    game->enemies[1].actions[game->enemies[1].action_count++].type = ACTION_PARRY;
-
-    game->enemies[2].actions[game->enemies[2].action_count++].type = ACTION_TACKLE;
-    game->enemies[2].actions[game->enemies[2].action_count++].type = ACTION_SLASH;
-    game->enemies[2].actions[game->enemies[2].action_count++].type = ACTION_EVADE;
-    game->enemies[2].actions[game->enemies[2].action_count++].type = ACTION_EVADE;
+    VecPush(game->enemies, chain);
 }
 
 void draw_debug_information(Game *game) {
@@ -428,18 +410,6 @@ void draw_debug_information(Game *game) {
 
     Rectangle r = rectf4(tile_x, tile_y, TILE * x_ratio, TILE * y_ratio);
     DrawRectangleLinesEx(r, 1, YELLOW);
-
-    pos.y += 32;
-    DrawTextEx(font, TextFormat("Last event type: %s", event_name[game->last_event_type]), pos, 32, 0, YELLOW);
-    pos.y += 64;
-    DrawTextEx(font, TextFormat("Queued event: %d", (int)VecLen(game->event_queue)), pos, 32, 0, YELLOW);
-
-    pos.y += 32;
-    for (int i = 0; i < VecLen(game->event_queue); ++i) {
-        Event e = game->event_queue[i];
-        DrawTextEx(font, TextFormat("  %d: %s", i, event_name[e.type]), pos, 32, 0, YELLOW);
-        pos.y += 32;
-    }
 }
 
 /* ============================================================
@@ -488,28 +458,24 @@ int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_
  */
 // 
 void set_next_state(Game *game, int state_to, float transition_seconds) {
+    printf("next state: %d\n", state_to);
     if (game->core_state != state_to && game->next_core_state != state_to) {
         game->next_core_state = state_to;
         game->transition = game->max_transition = transition_seconds;
     }
 }
 
-void handle_event(Game *game, Event *event) {
-    switch(event->type) {
-        case EVENT_PLAY_SOUND:
-        {
-            SoundWrapper sound = sound_assets[event->sound_asset_id - ASSET_SOUND_BEGIN];
-            if (sound.is_loaded)
-                PlaySound(sound.sound);
-        } break;
-    
-        case EVENT_TRANSITION_STATE:
-        {
-            set_next_state(game, event->transition_to, event->time);
-        } break;
+float state_activeness(Game *game, int state_for) {
+    if (game->core_state == state_for) {
+        if (game->next_core_state == state_for) {
+            return 1 - (game->transition / game->max_transition);
+        } else {
+            /* Leaving -- slowly fade out */
+            return (game->transition / game->max_transition);
+        }
     }
 
-    game->last_event_type = event->type;
+    return 0;
 }
 
 Action get_next_action_for(Actor *actor) {
@@ -532,16 +498,17 @@ void turn_tick(Game *game, float dt) {
         Do turn stuff.
         */
         /* Check if player / enemies are allowed to continue fighting. */
+        Enemy_Chain *chain = &game->enemies[game->chain_index];
 
-        if (game->player.health <= 0)          return; // Player is dead
-        if (game->enemy_idx == ENEMY_CAPACITY) return; // Enemy index is same as enemy capacity: enemy is all dead
+        if (game->player.health <= 0)                   return; // Player is dead
+        if (game->chain_index == VecLen(game->enemies)) return; // Enemy index is same as enemy capacity: enemy is all dead
 
         if (game->player_act) {
             /* Do actual matchup! */
 
-            Actor *enemy = &game->enemies[game->enemy_idx];
+            Actor *enemy = &chain->enemies[game->enemy_index];
             if (enemy->health <= 0) { // Progress to next enemy then break
-                game->enemy_idx++;
+                game->enemy_index++;
                 return;
             }
 
@@ -599,11 +566,7 @@ void turn_tick(Game *game, float dt) {
     }
 }
 
-void update(Game *game, float dt) {
-    while (accumulator > 1)    accumulator -= 1;
-    if (accumulator < 0)       accumulator  = 0;
-    mouse_pos = Vector2Scale(GetMousePosition(), 2);
-
+void transition_tick(Game *game, float dt) {
     if (game->core_state != game->next_core_state) {
         if (game->transition <= 0) {
             game->core_state = game->next_core_state;
@@ -613,16 +576,14 @@ void update(Game *game, float dt) {
 
     if (game->transition > 0) game->transition -= dt;
     if (game->transition < 0) game->transition = 0;
-    game->event_delay -= dt;
+}
 
-    if (game->event_delay <= 0 && 0 < VecLen(game->event_queue)) {
-        Event event = game->event_queue[0];
-        handle_event(game, &event);
+void update(Game *game, float dt) {
+    while (accumulator > 1)    accumulator -= 1;
+    if (accumulator < 0)       accumulator  = 0;
+    mouse_pos = Vector2Scale(GetMousePosition(), 2);
 
-        game->event_delay = event.time;
-        VecRemoveN(game->event_queue, 0);
-    }
-
+    transition_tick(game, dt);
     turn_tick(game, dt);
 
     /* animate tweens */
@@ -659,7 +620,7 @@ void update(Game *game, float dt) {
             slot_strength_target[i] = 0.75;
 
             if (CheckCollisionPointRec(mouse_pos, r)) {
-                selected = i;
+                selected                = i;
                 slot_strength_target[i] = 1;
             }
         }
@@ -698,11 +659,6 @@ void update(Game *game, float dt) {
             game->player.action_count -= 1;
         }
     }
-}
-
-/* TODO: @limit Event label should always be a static literal. */
-void fire_event(Game *game, Event event) {
-    VecPush(game->event_queue, event);
 }
 
 /* ============================================================
@@ -784,8 +740,9 @@ void do_combat_gui(Game *game) {
     */
     int alive_enemy_count = 0;
 
-    for (int i = 0; i < ENEMY_CAPACITY; ++i) {
-        if(game->enemies[i].health > 0) alive_enemy_count++;
+    Enemy_Chain *chain = &game->enemies[game->chain_index];
+    for (int i = 0; i < chain->enemy_count; ++i) {
+        if(chain->enemies[i].health > 0) alive_enemy_count++;
     }
 
     float enemy_group_height = alive_enemy_count * (TILE * 2.5); /* half the tile size as margins. */
@@ -796,10 +753,10 @@ void do_combat_gui(Game *game) {
 
     /* Based on enemy's count, render enemy sprites. */
     int rendered_enemies = 0;
-    for (int i = 0; i < ENEMY_CAPACITY; ++i) {
-        if(game->enemies[i].health <= 0) continue; // Ignore dead enemy (TODO: should have effect that enemy dies)
+    for (int i = 0; i < chain->enemy_count; ++i) {
+        if(chain->enemies[i].health <= 0) continue; // Ignore dead enemy (TODO: should have effect that enemy dies)
 
-        Actor *enemy = &game->enemies[i];
+        Actor *enemy = &chain->enemies[i];
         Rectangle rect = {0};
 
         rect.width  = TILE;
@@ -808,11 +765,10 @@ void do_combat_gui(Game *game) {
         rect.y = enemy_group_y + (rendered_enemies * TILE * 2.5);
 
         /* Inactive enemies will be shadered */
-        if (game->enemy_idx != i) BeginShaderMode(noise_shader);
+        if (i > game->enemy_index) BeginShaderMode(noise_shader);
         DrawRectangleRec(rect, WHITE);
         render_healthbar(enemy, rect);
-        if (game->enemy_idx != i) EndShaderMode();
-
+        if (i > game->enemy_index) EndShaderMode();
         rendered_enemies++;
     }
 
@@ -892,18 +848,9 @@ void do_title_gui(Game *game) {
 
     DrawTextEx(font, "Press Enter", pos, TILE, 0, WHITE);
 
-    if (VecLen(game->event_queue) == 0 && game->next_core_state == game->core_state) {
+    if (game->next_core_state == TITLE_SCREEN) {
         if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) || IsKeyPressed(KEY_ENTER)) {
-            Event event;
-            event.type = EVENT_PLAY_SOUND;
-            event.time = 1.0;
-            event.sound_asset_id = ASSET_SOUND_START_GAME;
-            fire_event(game, event);
-
-            event.type = EVENT_TRANSITION_STATE;
-            event.time = 2.0;
-            event.transition_to = STAGE_SELECT;
-            fire_event(game, event);
+            set_next_state(game, STAGE_SELECT, 2.0);
         }
     }
 }
@@ -925,7 +872,7 @@ void do_stage_select_gui(Game *game) {
     pos = Vector2Subtract(pos, Vector2Scale(button_size, 0.5));
 
     Rectangle r1 = rectv2(pos, button_size);
-    int stage_one = do_button_esque(hash("StageOne"), r1, 0, 0, INTERACT_CLICK_LEFT);
+    int stage_one = do_button_esque(hash("StageOne"), r1, 0, 0, INTERACT_CLICK_RIGHT);
     {
         Vector2 size = MeasureTextEx(font, "Stage 1", TILE, 0);
         Vector2 pivot = position_of_pivot(r1, TOP, CENTER);
@@ -936,9 +883,26 @@ void do_stage_select_gui(Game *game) {
     }
 
     pos.y += (TILE * 2.5);
-    int stage_two = do_button_esque(hash("StageTwo"), rectv2(pos, button_size), 0, 0, INTERACT_CLICK_LEFT);
+    Rectangle r2 = rectv2(pos, button_size);
+    int stage_two = do_button_esque(hash("StageTwo"), r2, 0, 0, INTERACT_CLICK_RIGHT);
+
     {
         Vector2 size = MeasureTextEx(font, "Stage 2", TILE, 0);
+        Vector2 pivot = position_of_pivot(r2, TOP, CENTER);
+        pivot.y += 12;
+        pivot.x -= size.x * 0.5;
+
+        DrawTextEx(font, "Stage 2", pivot, TILE, 0, WHITE);
+    }
+
+    if (game->next_core_state == STAGE_SELECT && (stage_one & INTERACT_CLICK_LEFT)) {
+        load_stage_one(game);
+        set_next_state(game, GAME_IN_PROGRESS, 2.0);
+    }
+
+    if (game->next_core_state == STAGE_SELECT && (stage_two & INTERACT_CLICK_LEFT)) {
+        // load_stage_two(game);
+        set_next_state(game, GAME_IN_PROGRESS, 2.0);
     }
 }
 
@@ -995,17 +959,15 @@ int main(void) {
     }
 
     Game game = {0};
-    game.event_queue = VecCreate(Event, 512);
+    game.enemies = VecCreate(Enemy_Chain, 6);
     game.max_transition = 1; /* division by zero prevention */
-
-    DEBUG_createphase(&game);
 
     load_tex_to_id(ASSET_BACKGROUND,         "assets/images/background.png");
     load_tex_to_id(ASSET_ACTION_ICON_SLASH,  "assets/images/spinning-sword.png");
     load_tex_to_id(ASSET_ACTION_ICON_EVADE,  "assets/images/wingfoot.png");
     load_tex_to_id(ASSET_ACTION_ICON_PARRY,  "assets/images/sword-break.png");
     load_tex_to_id(ASSET_ACTION_ICON_TACKLE, "assets/images/shield-bash.png");
-    
+
     load_sound_to_id(ASSET_SOUND_START_GAME, "assets/sounds/start_game.wav");
     accumulator = 0;
 
@@ -1045,7 +1007,7 @@ int main(void) {
             UnloadSound(sound_assets[i].sound);
     }
 
-    VecRelease(game.event_queue);
+    VecRelease(game.enemies);
     UnloadFont(font);
     UnloadRenderTexture(render_tex);
     UnloadShader(noise_shader);
