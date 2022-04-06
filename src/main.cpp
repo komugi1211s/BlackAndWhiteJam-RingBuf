@@ -63,29 +63,35 @@ enum /* Combat State */
 enum /* Asset state */
 {
     ASSET_NONE,
-    ASSET_BACKGROUND,
-    ASSET_FRACTAL_FADE_TEX,
+    ASSET_TEXTURE_BEGIN,
+        ASSET_BACKGROUND,
+        ASSET_FRACTAL_FADE_TEX,
 
-    /* Player / Animations */
-    ASSET_PLAYER_BEGIN,
-    ASSET_PLAYER_RESTING,
-    ASSET_PLAYER_WALKING,
-    ASSET_PLAYER_PLANNING,
-    ASSET_PLAYER_ATTACK,
-    ASSET_PLAYER_EVADE,
-    ASSET_PLAYER_BLOCKING,
-    ASSET_PLAYER_TACKLING,
-    ASSET_PLAYER_INJURED,
-    ASSET_PLAYER_DYING,
-    ASSET_PLAYER_END,
+        /* Player / Animations */
+        ASSET_PLAYER_BEGIN,
+        ASSET_PLAYER_RESTING,
+        ASSET_PLAYER_WALKING,
+        ASSET_PLAYER_PLANNING,
+        ASSET_PLAYER_ATTACK,
+        ASSET_PLAYER_EVADE,
+        ASSET_PLAYER_BLOCKING,
+        ASSET_PLAYER_TACKLING,
+        ASSET_PLAYER_INJURED,
+        ASSET_PLAYER_DYING,
+        ASSET_PLAYER_END,
 
-    /* Skill Icons */
-    ASSET_ACTION_ICON_BEGIN,
-    ASSET_ACTION_ICON_SLASH,
-    ASSET_ACTION_ICON_EVADE,
-    ASSET_ACTION_ICON_PARRY,
-    ASSET_ACTION_ICON_TACKLE,
-    ASSET_ACTION_ICON_END,
+        /* Skill Icons */
+        ASSET_ACTION_ICON_BEGIN,
+        ASSET_ACTION_ICON_SLASH,
+        ASSET_ACTION_ICON_EVADE,
+        ASSET_ACTION_ICON_PARRY,
+        ASSET_ACTION_ICON_TACKLE,
+        ASSET_ACTION_ICON_END,
+    ASSET_TEXTURE_END,
+
+    ASSET_SOUND_BEGIN,
+        ASSET_SOUND_START_GAME,
+    ASSET_SOUND_END,
 
     ASSET_STATE_COUNT,
 };
@@ -95,13 +101,20 @@ struct Tex2DWrapper { /* Wrapper for Texture2D -- to really know if the assets a
     Texture2D t;
 };
 
-Tex2DWrapper art_assets[ASSET_STATE_COUNT];
+struct SoundWrapper {
+    int is_loaded;
+    Sound sound;
+};
+
+Tex2DWrapper art_assets[ASSET_TEXTURE_END - ASSET_TEXTURE_BEGIN];
+SoundWrapper sound_assets[ASSET_SOUND_END - ASSET_SOUND_BEGIN];
+
 int player_animation_states[ASSET_PLAYER_END - ASSET_PLAYER_BEGIN];
 
 int load_tex_to_id(int position, const char *tex) {
-    assert(position >= 0 && position < ASSET_STATE_COUNT);
+    assert(ASSET_TEXTURE_BEGIN < position && position < ASSET_TEXTURE_END);
 
-    Tex2DWrapper *wrapper = &art_assets[position];
+    Tex2DWrapper *wrapper = &art_assets[position - ASSET_TEXTURE_BEGIN];
     if (wrapper->is_loaded) {
         UnloadTexture(wrapper->t);
         wrapper->is_loaded = 0;
@@ -114,6 +127,24 @@ int load_tex_to_id(int position, const char *tex) {
         return 1;
     }
 
+    return 0;
+}
+
+int load_sound_to_id(int position, const char *asset_name) {
+    assert(ASSET_SOUND_BEGIN < position && position < ASSET_SOUND_END);
+
+    SoundWrapper *wrapper = &sound_assets[position - ASSET_SOUND_BEGIN];
+    if (wrapper->is_loaded) {
+        UnloadSound(wrapper->sound);
+        wrapper->is_loaded = 0;
+    }
+
+    Sound sound = LoadSound(asset_name);
+    if (sound.stream.buffer != 0) {
+        wrapper->sound = sound;
+        wrapper->is_loaded;
+        return 1;
+    }
     return 0;
 }
 
@@ -159,10 +190,39 @@ struct Actor {
     Action actions[ACTION_CAPACITY];
 };
 
-struct Event {
-    const char *name;
-    uint32_t    hash;
+#define EVENT_LIST \
+    EVENT(NONE)             \
+    EVENT(PLAY_SOUND)       \
+    EVENT(TRANSITION_STATE) \
+
+#define EVENT(ev) fz_CONCAT(EVENT_, ev),
+enum
+{
+    EVENT_LIST
 };
+#undef EVENT
+
+#define EVENT(ev) fz_STR(fz_CONCAT(EVENT_, ev)),
+const char *event_name[] = {
+    EVENT_LIST
+};
+#undef EVENT
+
+struct Event {
+    int   type;
+    float time;
+
+    union {
+        struct { /* Transition State */
+            int transition_to;
+        };
+
+        struct { /* Play Sound */
+            int sound_asset_id;
+        };
+    };
+};
+
 
 struct Game {
     int core_state;
@@ -177,7 +237,9 @@ struct Game {
     int enemy_idx;
     Actor enemies[ENEMY_CAPACITY];
 
-    Vec(Event) events;
+    float      event_delay;
+    int        last_event_type;
+    Vec(Event) event_queue;
 };
 
 uint32_t hash(const char *c) {
@@ -257,6 +319,18 @@ Vector2 position_of_pivot(Rectangle rect, int y_axis, int x_axis) {
     }
 
     return result;
+}
+
+/*
+    Align position of text specified by pivot.
+*/
+Vector2 align_text_by(Vector2 pos, char *text, int y_align, int x_align, float font_size) {
+    Vector2 size = MeasureTextEx(font, text, font_size, 0);
+    return position_of_pivot(
+        rectv2(pos, Vector2Negate(size)),
+        y_align,
+        x_align
+    );
 }
 
 Rectangle get_available_action_layout(void) {
@@ -356,12 +430,14 @@ void draw_debug_information(Game *game) {
     DrawRectangleLinesEx(r, 1, YELLOW);
 
     pos.y += 32;
-    DrawTextEx(font, TextFormat("This frame's event: %d", (int)VecLen(game->events)), pos, 32, 0, YELLOW);
+    DrawTextEx(font, TextFormat("Last event type: %s", event_name[game->last_event_type]), pos, 32, 0, YELLOW);
+    pos.y += 64;
+    DrawTextEx(font, TextFormat("Queued event: %d", (int)VecLen(game->event_queue)), pos, 32, 0, YELLOW);
 
     pos.y += 32;
-    for (int i = 0; i < VecLen(game->events); ++i) {
-        Event e = game->events[i];
-        DrawTextEx(font, TextFormat("  %d: %s", i, e.name), pos, 32, 0, YELLOW);
+    for (int i = 0; i < VecLen(game->event_queue); ++i) {
+        Event e = game->event_queue[i];
+        DrawTextEx(font, TextFormat("  %d: %s", i, event_name[e.type]), pos, 32, 0, YELLOW);
         pos.y += 32;
     }
 }
@@ -410,6 +486,31 @@ int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_
 /* ============================================================
  * Game State / logic.
  */
+// 
+void set_next_state(Game *game, int state_to, float transition_seconds) {
+    if (game->core_state != state_to && game->next_core_state != state_to) {
+        game->next_core_state = state_to;
+        game->transition = game->max_transition = transition_seconds;
+    }
+}
+
+void handle_event(Game *game, Event *event) {
+    switch(event->type) {
+        case EVENT_PLAY_SOUND:
+        {
+            SoundWrapper sound = sound_assets[event->sound_asset_id - ASSET_SOUND_BEGIN];
+            if (sound.is_loaded)
+                PlaySound(sound.sound);
+        } break;
+    
+        case EVENT_TRANSITION_STATE:
+        {
+            set_next_state(game, event->transition_to, event->time);
+        } break;
+    }
+
+    game->last_event_type = event->type;
+}
 
 Action get_next_action_for(Actor *actor) {
     Action action = actor->actions[actor->action_index];
@@ -498,13 +599,6 @@ void turn_tick(Game *game, float dt) {
     }
 }
 
-void set_next_state(Game *game, int state_to, float transition_seconds) {
-    if (game->core_state != state_to && game->next_core_state != state_to) {
-        game->next_core_state = state_to;
-        game->transition = game->max_transition = transition_seconds;
-    }
-}
-
 void update(Game *game, float dt) {
     while (accumulator > 1)    accumulator -= 1;
     if (accumulator < 0)       accumulator  = 0;
@@ -519,19 +613,16 @@ void update(Game *game, float dt) {
 
     if (game->transition > 0) game->transition -= dt;
     if (game->transition < 0) game->transition = 0;
+    game->event_delay -= dt;
 
-    /* Event that happened last frame. */
-    for (int i = 0; i < VecLen(game->events); ++i) {
-        Event e = game->events[i];
+    if (game->event_delay <= 0 && 0 < VecLen(game->event_queue)) {
+        Event event = game->event_queue[0];
+        handle_event(game, &event);
 
-        /* TODO: This is the reason why the game get's extremely slow */
-        if (e.hash == hash("Game Begin")) {
-            set_next_state(game, STAGE_SELECT, 2.0);
-            break;
-        }
+        game->event_delay = event.time;
+        VecRemoveN(game->event_queue, 0);
     }
 
-    VecClear(game->events);
     turn_tick(game, dt);
 
     /* animate tweens */
@@ -610,13 +701,8 @@ void update(Game *game, float dt) {
 }
 
 /* TODO: @limit Event label should always be a static literal. */
-void fire_event(Game *game, const char *event_label) {
-    Event event = {0};
-
-    event.name = event_label;
-    event.hash = hash(event_label);
-
-    VecPush(game->events, event);
+void fire_event(Game *game, Event event) {
+    VecPush(game->event_queue, event);
 }
 
 /* ============================================================
@@ -802,14 +888,22 @@ void do_title_gui(Game *game) {
     EndShaderMode();
 
     Vector2 pos = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.65f };
-    Vector2 size = MeasureTextEx(font, "Press Enter", TILE, 0);
+    pos = align_text_by(pos, "Press Enter", MIDDLE, CENTER, TILE);
 
-    pos = Vector2Subtract(pos, Vector2Scale(size, 0.5));
     DrawTextEx(font, "Press Enter", pos, TILE, 0, WHITE);
 
-    if (game->next_core_state == game->core_state) {
+    if (VecLen(game->event_queue) == 0 && game->next_core_state == game->core_state) {
         if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) || IsKeyPressed(KEY_ENTER)) {
-            fire_event(game, "Game Begin");
+            Event event;
+            event.type = EVENT_PLAY_SOUND;
+            event.time = 1.0;
+            event.sound_asset_id = ASSET_SOUND_START_GAME;
+            fire_event(game, event);
+
+            event.type = EVENT_TRANSITION_STATE;
+            event.time = 2.0;
+            event.transition_to = STAGE_SELECT;
+            fire_event(game, event);
         }
     }
 }
@@ -901,7 +995,7 @@ int main(void) {
     }
 
     Game game = {0};
-    game.events = VecCreate(Event, 512);
+    game.event_queue = VecCreate(Event, 512);
     game.max_transition = 1; /* division by zero prevention */
 
     DEBUG_createphase(&game);
@@ -911,6 +1005,8 @@ int main(void) {
     load_tex_to_id(ASSET_ACTION_ICON_EVADE,  "assets/images/wingfoot.png");
     load_tex_to_id(ASSET_ACTION_ICON_PARRY,  "assets/images/sword-break.png");
     load_tex_to_id(ASSET_ACTION_ICON_TACKLE, "assets/images/shield-bash.png");
+    
+    load_sound_to_id(ASSET_SOUND_START_GAME, "assets/sounds/start_game.wav");
     accumulator = 0;
 
     while(!WindowShouldClose()) {
@@ -939,12 +1035,17 @@ int main(void) {
         EndDrawing();
     }
 
-    for (int i = 0; i < ASSET_STATE_COUNT; ++i) {
+    for (int i = 0; i < (ASSET_TEXTURE_END - ASSET_TEXTURE_BEGIN); ++i) {
         if (art_assets[i].is_loaded)
             UnloadTexture(art_assets[i].t);
     }
 
-    VecRelease(game.events);
+    for (int i = 0; i < (ASSET_SOUND_END - ASSET_SOUND_BEGIN); ++i) {
+        if (sound_assets[i].is_loaded)
+            UnloadSound(sound_assets[i].sound);
+    }
+
+    VecRelease(game.event_queue);
     UnloadFont(font);
     UnloadRenderTexture(render_tex);
     UnloadShader(noise_shader);
