@@ -378,7 +378,7 @@ enum
     INTERACT_CLICK_RIGHT = 1 << 2,
 };
 
-int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_size, float alpha, int deny_interact_mask) {
+int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_size, int deny_interact_mask) {
     int result = INTERACT_NONE;
 
     if (CheckCollisionPointRec(mouse_pos, rect)) {
@@ -390,19 +390,18 @@ int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_
 
     result &= ~deny_interact_mask;
 
-    Color a = Fade(WHITE, alpha);
     if ((result & INTERACT_CLICK_LEFT) || (result & INTERACT_CLICK_RIGHT)) {
-        DrawRectangleLinesEx(rect, 8, a);
+        DrawRectangleLinesEx(rect, 8, WHITE);
     } if (result & INTERACT_HOVERING) {
-        DrawRectangleLinesEx(rect, 4, a);
+        DrawRectangleLinesEx(rect, 4, WHITE);
     } else {
-        DrawRectangleLinesEx(rect, 1, a);
+        DrawRectangleLinesEx(rect, 1, WHITE);
     }
 
     if (label) {
         Vector2 size = MeasureTextEx(font, label, label_size, 0);
         Vector2 pos  = Vector2Subtract(position_of_pivot(rect, MIDDLE, CENTER), Vector2Scale(size, 0.5));
-        DrawTextEx(font, label, pos, label_size, 0, a);
+        DrawTextEx(font, label, pos, label_size, 0, WHITE);
     }
 
     return result;
@@ -512,14 +511,14 @@ void update(Game *game, float dt) {
     mouse_pos = Vector2Scale(GetMousePosition(), 2);
 
     if (game->core_state != game->next_core_state) {
-        if (game->transition > 0) {
-            game->transition -= dt;
-        }
-        if (game->transition < 0) {
+        if (game->transition <= 0) {
             game->core_state = game->next_core_state;
-            game->transition = 0;
+            game->transition = game->max_transition;
         }
     }
+
+    if (game->transition > 0) game->transition -= dt;
+    if (game->transition < 0) game->transition = 0;
 
     /* Event that happened last frame. */
     for (int i = 0; i < VecLen(game->events); ++i) {
@@ -793,6 +792,7 @@ void do_combat_gui(Game *game) {
 
 void do_title_gui(Game *game) {
     Rectangle render_rect = render_tex_rect();
+
     BeginShaderMode(dither_shader);
     Tex2DWrapper wrapper = art_assets[ASSET_BACKGROUND];
     if (wrapper.is_loaded) {
@@ -801,19 +801,22 @@ void do_title_gui(Game *game) {
     }
     EndShaderMode();
 
-    Vector2 button_size = { TILE * 4, TILE };
-    Vector2 pos = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.75f };
-    pos = Vector2Subtract(pos, Vector2Scale(button_size, 0.5));
+    Vector2 pos = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.65f };
+    Vector2 size = MeasureTextEx(font, "Press Enter", TILE, 0);
 
-    int interacted = do_button_esque(hash("gamestart"), rectv2(pos, button_size), "Game Start", TILE * 0.75, INTERACT_NONE);
+    pos = Vector2Subtract(pos, Vector2Scale(size, 0.5));
+    DrawTextEx(font, "Press Enter", pos, TILE, 0, WHITE);
 
-    if ((interacted & INTERACT_CLICK_LEFT) || IsKeyPressed(KEY_ENTER)) {
-        fire_event(game, "Game Begin");
+    if (game->next_core_state == game->core_state) {
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) || IsKeyPressed(KEY_ENTER)) {
+            fire_event(game, "Game Begin");
+        }
     }
 }
 
 void do_stage_select_gui(Game *game) {
     Rectangle render_rect = render_tex_rect();
+
     BeginShaderMode(dither_shader);
     Tex2DWrapper wrapper = art_assets[ASSET_BACKGROUND];
     if (wrapper.is_loaded) {
@@ -822,14 +825,26 @@ void do_stage_select_gui(Game *game) {
     }
     EndShaderMode();
 
-    Vector2 button_size = { TILE * 4, TILE };
-    Vector2 pos         = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.75f };
+    Vector2 button_size = { TILE * 8, TILE * 2 };
+
+    Vector2 pos         = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.65f };
     pos = Vector2Subtract(pos, Vector2Scale(button_size, 0.5));
 
-    int interacted = do_button_esque(hash("gamestart"), rectv2(pos, button_size), "Game Start", TILE * 0.75, INTERACT_NONE);
+    Rectangle r1 = rectv2(pos, button_size);
+    int stage_one = do_button_esque(hash("StageOne"), r1, 0, 0, INTERACT_CLICK_LEFT);
+    {
+        Vector2 size = MeasureTextEx(font, "Stage 1", TILE, 0);
+        Vector2 pivot = position_of_pivot(r1, TOP, CENTER);
+        pivot.y += 12;
+        pivot.x -= size.x * 0.5;
 
-    if ((interacted & INTERACT_CLICK_LEFT) || IsKeyPressed(KEY_ENTER)) {
-        fire_event(game, "Game Begin");
+        DrawTextEx(font, "Stage 1", pivot, TILE, 0, WHITE);
+    }
+
+    pos.y += (TILE * 2.5);
+    int stage_two = do_button_esque(hash("StageTwo"), rectv2(pos, button_size), 0, 0, INTERACT_CLICK_LEFT);
+    {
+        Vector2 size = MeasureTextEx(font, "Stage 2", TILE, 0);
     }
 }
 
@@ -878,6 +893,9 @@ int main(void) {
     render_tex = LoadRenderTexture(render_rect.width, render_rect.height);
     SetTextureFilter(render_tex.texture, TEXTURE_FILTER_BILINEAR);
 
+    float a = 1;
+    SetShaderValue(fade_inout_shader, fade_inout_shader_loc.strength_loc, &a, SHADER_UNIFORM_FLOAT);
+
     for (int i = 0; i < fz_COUNTOF(slot_strength); ++i) {
         slot_strength[i] = slot_strength_target[i] = 0.5;
     }
@@ -910,11 +928,12 @@ int main(void) {
 
         BeginDrawing();
         ClearBackground(BLACK);
+        BeginShaderMode(fade_inout_shader);
             Rectangle swapped = render_rect;
             swapped.height *= -1;
             Vector2 offset = {};
             DrawTexturePro(render_tex.texture, swapped, window_size, offset, 0, WHITE);
-
+        EndShaderMode();
         draw_debug_information(&game);
 
         EndDrawing();
