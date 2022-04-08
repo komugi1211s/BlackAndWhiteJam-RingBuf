@@ -1,8 +1,7 @@
-
 @echo off
 
 IF NOT EXIST dist (
-    rem "[Build]: Making dist directory."
+    REM "[Build]: Making dist directory."
     mkdir dist
 )
 
@@ -22,14 +21,9 @@ endlocal
 
 
 IF EXIST assets (
-    IF EXIST "./dist/assets" (
-        rem "[Build]: Clearing Assets inside dist directory."
-        rm -r "./dist/assets"
-    )
-
-    rem "[Build]: Copying assets into dist directory."
-    copy -r ./assets ./dist/assets
+    REM "[Build]: Copying assets into dist directory."
+    xcopy .\assets\ .\dist\assets\ /Y /E
 ) ELSE (
-    rem "[Build]: WARNING - asset directory does not exist. skipping the copy of assets."
+    REM "[Build]: WARNING - asset directory does not exist. skipping the copy of assets."
 )
 
