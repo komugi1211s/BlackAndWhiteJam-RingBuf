@@ -6,7 +6,7 @@ fi
 
 echo "[Build]: Building executables."
 FILE='src/main.cpp'
-clang++ -g -Wall -fsanitize=undefined -o dist/compiled $FILE -lm -lGL -lGLEW -lglfw -lraylib -fno-caret-diagnostics
+clang -g -Wall -fsanitize=address -o dist/compiled $FILE -lm -lGL -lGLEW -lglfw -lraylib -fno-caret-diagnostics
 
 if [ -d "assets" ]; then
     if [ -d "dist/assets" ]; then
