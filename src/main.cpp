@@ -9,13 +9,13 @@
 /* Constants */
 const float CHARACTER_Y_POSITION_FROM_TOP = 0.5;
 const float BASE_SHADER_EFFECT_THRESHOLD = 0.5;
-#define TILE 64
+#define TILE 80
 
 fz_STATIC_ASSERT(TILE % 2 == 0);
 
 /* Game globals */
-static Rectangle window_size = { 0, 0, 1280, 720 };
-static Rectangle render_size = { 0, 0, 1600, 900 };
+static Rectangle window_size = { 0, 0, 1280,  720 };
+static Rectangle render_size = { 0, 0, 1920, 1080 };
 static float accumulator = 0;
 static Vector2 mouse_pos = {};
 
@@ -222,7 +222,7 @@ struct Actor {
     Action actions[ACTION_CAPACITY];
 };
 
-#define EVENT_LIST \
+#define EVENT_LIST          \
     EVENT(NONE)             \
     EVENT(PLAY_SOUND)       \
     EVENT(TRANSITION_STATE) \
@@ -283,7 +283,7 @@ struct Game {
     Vec(Effect)      effects;
 
     Camera2D camera;
-    float camerashake_shift_distance;    
+    float camerashake_shift_distance;
 };
 
 uint32_t hash(const char *c) {
@@ -629,7 +629,7 @@ enum
     INTERACT_CLICK_RIGHT = 1 << 2,
 };
 
-int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_size, int deny_interact_mask) {
+int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_size, int interact_mask, Color color) {
     int result = INTERACT_NONE;
 
     if (CheckCollisionPointRec(mouse_pos, rect)) {
@@ -639,20 +639,20 @@ int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_
         if (IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) result |= INTERACT_CLICK_RIGHT;
     }
 
-    result &= ~deny_interact_mask;
+    result &= interact_mask;
 
     if ((result & INTERACT_CLICK_LEFT) || (result & INTERACT_CLICK_RIGHT)) {
-        DrawRectangleLinesEx(rect, 8, WHITE);
+        DrawRectangleLinesEx(rect, 8, color);
     } if (result & INTERACT_HOVERING) {
-        DrawRectangleLinesEx(rect, 4, WHITE);
+        DrawRectangleLinesEx(rect, 4, color);
     } else {
-        DrawRectangleLinesEx(rect, 1, WHITE);
+        DrawRectangleLinesEx(rect, 1, color);
     }
 
     if (label) {
         Vector2 size = MeasureTextEx(font, label, label_size, 0);
         Vector2 pos  = Vector2Subtract(position_of_pivot(rect, MIDDLE, CENTER), Vector2Scale(size, 0.5));
-        DrawTextEx(font, label, pos, label_size, 0, WHITE);
+        DrawTextEx(font, label, pos, label_size, 0, color);
     }
 
     return result;
@@ -675,11 +675,13 @@ int is_transition_done(State *state) {
 }
 
 float state_delta(State *state) {
-    if (state->max_transition == 0) return 0;
-
     if (state->current == state->next) {
+        if (state->max_transition == 0) return 1;
+
         return 1 - (state->transition / state->max_transition);
     } else {
+        if (state->max_transition == 0) return 0;
+
         return (state->transition / state->max_transition);
     }
 }
@@ -719,128 +721,120 @@ Action get_next_action_for(Actor *actor) {
 void turn_tick(Game *game, float dt) {
     if (game->core_state.current != GAME_IN_PROGRESS) return;
     if (interval_tick(&game->turn_interval, dt)) {
-        /*
-        Do turn stuff.
-        */
-        if (game->combat_state.current == COMBAT_STATE_RUNNING_TURN) {
-            /* Check if player / enemies are allowed to continue fighting. */
-            Enemy_Chain *chain = &game->enemies[game->chain_index];
+        /* Check if player / enemies are allowed to continue fighting. */
+        Enemy_Chain *chain = &game->enemies[game->chain_index];
 
-            if (game->player.health <= 0) { 
-                set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_DIED, 4.0);
-                return;
-            }
-
-            if (game->chain_index == VecLen(game->enemies)) { 
-                set_next_state(&game->combat_state, COMBAT_STATE_STAGE_COMPLETE, 2);
-                return;
-            }
-
-            if (game->enemy_index == chain->enemy_count) {
-                set_next_state(&game->combat_state, COMBAT_STATE_GOING_NEXT_PHASE, 2);
-                game->enemy_index = 0;
-                game->chain_index++;
-                return;
-            }
-
-            Actor *enemy = &chain->enemies[game->enemy_index];
-
-            if (enemy->health <= 0) { // Progress to next enemy then break
-                set_next_state(&game->combat_state, COMBAT_STATE_ENEMY_DIED, 1);
-                game->enemy_index++;
-                return;
-            }
-
-            Action player_action = get_next_action_for(&game->player);
-            Action enemy_action  = get_next_action_for(enemy);
-
-            Vector2 enemy_effect_pos;
-            Vector2 enemy_effect_size;
-            enemy_effect_pos.x = (render_tex.texture.width * 0.75) - TILE;
-            enemy_effect_pos.y = (render_tex.texture.height * CHARACTER_Y_POSITION_FROM_TOP) - TILE;
-            enemy_effect_size = { TILE * 2, TILE * 2 };
-
-            Vector2 player_effect_pos;
-            Vector2 player_effect_size;
-            player_effect_pos.x = (render_tex.texture.width * 0.25) + TILE * 0.5;
-            player_effect_pos.y = (render_tex.texture.height * CHARACTER_Y_POSITION_FROM_TOP);
-            player_effect_size = { TILE * 2, TILE * 2 };
-
-            Rectangle enemy_effect_rect  = rectv2(enemy_effect_pos, enemy_effect_size);
-            Rectangle player_effect_rect = rectv2(player_effect_pos, player_effect_size);
-
-            int player_dealt_action = -1;
-            int enemy_dealt_action = -1;
-
-            switch(player_action.type) {
-                /* Offensive Maneuver */
-                case ACTION_SLASH: switch(enemy_action.type) {
-                    case ACTION_PARRY:  /* blocks  */
-                        break;
-
-                    case ACTION_SLASH:  /* deals   */
-                    case ACTION_EVADE:  /* deals   */
-                    case ACTION_TACKLE: /* deals   */
-                    {
-                        shake_camera(game, 8);
-                        spawn_effect(game, ASSET_EFFECT_SPRITE_RECEIVED_SLASH, enemy_effect_rect);
-                        enemy->health -= 1;
-                    } break;
-                } break;
-
-                case ACTION_TACKLE: switch(enemy_action.type) {
-                    case ACTION_EVADE:  /* blocked */
-                        break;
-
-                    case ACTION_PARRY:  /* deals   */
-                    case ACTION_SLASH:  /* deals   */
-                    case ACTION_TACKLE: /* deals   */
-                    {
-                        shake_camera(game, 8);
-                        enemy->health -= 1;
-                    } break;
-                } break;
-
-                /* Defensive Maneuver */
-                case ACTION_PARRY: switch(enemy_action.type) {
-                    case ACTION_PARRY:  /* nothing */
-                    case ACTION_EVADE:  /* nothing */
-                        break;
-
-                    case ACTION_SLASH:  /* avoids  */
-                        break; /* TODO: generate animation */
-
-                    case ACTION_TACKLE: /* damaged */
-                        shake_camera(game, 3);
-                        game->player.health -= 1;
-                } break;
-
-                case ACTION_EVADE: switch(enemy_action.type) {
-                    case ACTION_PARRY:  /* nothing */
-                    case ACTION_EVADE:  /* nothing */
-                        break;
-
-                    case ACTION_TACKLE: /* avoids  */
-                        break; /* TODO: generate animation */
-
-                    case ACTION_SLASH:  /* damaged */
-                    {
-                        shake_camera(game, 3);
-                        spawn_effect(game, ASSET_EFFECT_SPRITE_RECEIVED_SLASH, player_effect_rect);
-                        game->player.health -= 1;
-                    } break;
-                } break;
-            }
-
+        if (game->player.health <= 0) { 
+            set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_DIED, 4.0);
+            return;
         }
 
+        if (game->chain_index == VecLen(game->enemies)) { 
+            set_next_state(&game->combat_state, COMBAT_STATE_STAGE_COMPLETE, 1);
+            return;
+        }
+
+        if (game->enemy_index == chain->enemy_count) {
+            set_next_state(&game->combat_state, COMBAT_STATE_GOING_NEXT_PHASE, 1);
+            game->enemy_index = 0;
+            game->chain_index++;
+            return;
+        }
+
+        Actor *enemy = &chain->enemies[game->enemy_index];
+
+        if (enemy->health <= 0) { // Progress to next enemy then break
+            set_next_state(&game->combat_state, COMBAT_STATE_ENEMY_DIED, 1);
+            game->enemy_index++;
+            return;
+        }
+
+        Action player_action = get_next_action_for(&game->player);
+        Action enemy_action  = get_next_action_for(enemy);
+
+        Vector2 enemy_effect_pos;
+        Vector2 enemy_effect_size;
+        enemy_effect_pos.x = (render_tex.texture.width * 0.75) - TILE;
+        enemy_effect_pos.y = (render_tex.texture.height * CHARACTER_Y_POSITION_FROM_TOP) - TILE;
+        enemy_effect_size = { TILE * 2, TILE * 2 };
+
+        Vector2 player_effect_pos;
+        Vector2 player_effect_size;
+        player_effect_pos.x = (render_tex.texture.width * 0.25) + TILE * 0.5;
+        player_effect_pos.y = (render_tex.texture.height * CHARACTER_Y_POSITION_FROM_TOP);
+        player_effect_size = { TILE * 2, TILE * 2 };
+
+        Rectangle enemy_effect_rect  = rectv2(enemy_effect_pos, enemy_effect_size);
+        Rectangle player_effect_rect = rectv2(player_effect_pos, player_effect_size);
+
+        int player_dealt_action = -1;
+        int enemy_dealt_action = -1;
+
+        switch(player_action.type) {
+            /* Offensive Maneuver */
+            case ACTION_SLASH: switch(enemy_action.type) {
+                case ACTION_PARRY:  /* blocks  */
+                    break;
+
+                case ACTION_SLASH:  /* deals   */
+                case ACTION_EVADE:  /* deals   */
+                case ACTION_TACKLE: /* deals   */
+                {
+                    shake_camera(game, 8);
+                    spawn_effect(game, ASSET_EFFECT_SPRITE_RECEIVED_SLASH, enemy_effect_rect);
+                    enemy->health -= 1;
+                } break;
+            } break;
+
+            case ACTION_TACKLE: switch(enemy_action.type) {
+                case ACTION_EVADE:  /* blocked */
+                    break;
+
+                case ACTION_PARRY:  /* deals   */
+                case ACTION_SLASH:  /* deals   */
+                case ACTION_TACKLE: /* deals   */
+                {
+                    shake_camera(game, 8);
+                    enemy->health -= 1;
+                } break;
+            } break;
+
+            /* Defensive Maneuver */
+            case ACTION_PARRY: switch(enemy_action.type) {
+                case ACTION_PARRY:  /* nothing */
+                case ACTION_EVADE:  /* nothing */
+                    break;
+
+                case ACTION_SLASH:  /* avoids  */
+                    break; /* TODO: generate animation */
+
+                case ACTION_TACKLE: /* damaged */
+                    shake_camera(game, 3);
+                    game->player.health -= 1;
+            } break;
+
+            case ACTION_EVADE: switch(enemy_action.type) {
+                case ACTION_PARRY:  /* nothing */
+                case ACTION_EVADE:  /* nothing */
+                    break;
+
+                case ACTION_TACKLE: /* avoids  */
+                    break; /* TODO: generate animation */
+
+                case ACTION_SLASH:  /* damaged */
+                {
+                    shake_camera(game, 3);
+                    spawn_effect(game, ASSET_EFFECT_SPRITE_RECEIVED_SLASH, player_effect_rect);
+                    game->player.health -= 1;
+                } break;
+            } break;
+        }
     }
 }
 
 
 void effects_tick(Game *game, float dt) {
     if (interval_tick(&game->effect_interval, dt)) {
-
         Vec(int) deleting_index = VecCreateEx(int, VecLen(game->effects) + 1, fz_global_temp_allocator);
         for (int i = 0; i < VecLen(game->effects); ++i) {
             Effect *e = &game->effects[i];
@@ -871,29 +865,6 @@ void update(Game *game, float dt) {
     mouse_pos.x = m.x * x_ratio;
     mouse_pos.y = m.y * y_ratio;
 
-    state_tick(&game->core_state,   dt);
-    state_tick(&game->combat_state, dt);
-
-    effects_tick(game, dt);
-    turn_tick(game, dt);
-
-    switch(game->combat_state.current) {
-        case COMBAT_STATE_BEGIN:
-        {
-            if (is_transition_done(&game->combat_state)) set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 1);
-        } break;
-
-        case COMBAT_STATE_GOING_NEXT_PHASE:
-        {
-            if (is_transition_done(&game->combat_state)) set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 1);
-        } break;
-
-        case COMBAT_STATE_ENEMY_DIED:
-        {
-            if (is_transition_done(&game->combat_state)) set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 0.5);
-        } break;
-    }
-
     /* animate tweens */
     for (int i = 0; i < fz_COUNTOF(slot_strength); ++i) {
         float target      = slot_strength_target[i];
@@ -902,74 +873,107 @@ void update(Game *game, float dt) {
 
     /* animate camera */
     game->camerashake_shift_distance -= dt * 20;
-    if (game->camerashake_shift_distance < 0) game->camerashake_shift_distance = 0;
+    if (game->camerashake_shift_distance < 0)
+        game->camerashake_shift_distance = 0;
 
     float shake_x = (GetRandomValue(0, 100) / 100.0f) - 0.5;
     float shake_y = (GetRandomValue(0, 100) / 100.0f) - 0.5;
     game->camera.target.x = shake_x * game->camerashake_shift_distance;
     game->camera.target.y = shake_y * game->camerashake_shift_distance;
 
-    /*
-    is player deciding to act with current action queue?
-    */
-    if (game->combat_state.current == COMBAT_STATE_PLAYER_PLANNING
-        && is_transition_done(&game->combat_state))
-    {
-        if (IsKeyPressed('P')) {
-            if (game->player.action_count > 0) {
-                set_next_state(&game->combat_state, COMBAT_STATE_RUNNING_TURN, 2);
-                game->locked_in_index = game->player.action_count;
-            }
-        }
+    game->camera.offset.x = (m.x / window_size.width) - 0.5;
+    game->camera.offset.y = (m.y / window_size.height) - 0.5;
+    game->camera.offset = Vector2Scale(game->camera.offset, TILE * 0.1);
 
-        /* Update available action / push scheme */
+    /* Ticks */
+    state_tick(&game->core_state,   dt);
+    state_tick(&game->combat_state, dt);
+    effects_tick(game, dt);
+
+    switch(game->combat_state.current) {
+        case COMBAT_STATE_BEGIN:
         {
-            Rectangle layout = get_available_action_layout();
-            int selected = -1;
+            if (is_transition_done(&game->combat_state))
+                set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 0.25);
+        } break;
 
-            for (int i = 0; i < fz_COUNTOF(base_actions); ++i) {
-                Rectangle r = get_rowslot_for_nth_tile(layout, i, 1.5, 8);
-                slot_strength_target[i] = 0.75;
-
-                if (CheckCollisionPointRec(mouse_pos, r)) {
-                    selected                = i;
-                    slot_strength_target[i] = 1;
-                }
-            }
-
-            if (selected != -1 && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-                Action a = base_actions[selected];
-
-                if (game->player.action_count < ACTION_CAPACITY) {
-                    game->player.actions[game->player.action_count++] = a;
-                }
-            }
-        }
-
-        /* Update active action / select & delete scheme */
+        case COMBAT_STATE_GOING_NEXT_PHASE:
         {
-            Rectangle queued_layout = get_action_queue_layout();
+            if (is_transition_done(&game->combat_state))
+                set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 0.25);
+        } break;
 
-            int deleting_index = -1;
-            for (int i = 0; i < game->player.action_count; ++i) {
-                Rectangle r = get_rowslot_for_nth_tile(queued_layout, i, 1, 8);
+        case COMBAT_STATE_ENEMY_DIED:
+        {
+            if (is_transition_done(&game->combat_state))
+                set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 0.25);
+        } break;
 
-                if (CheckCollisionPointRec(mouse_pos, r) &&
-                    IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+        case COMBAT_STATE_RUNNING_TURN:
+        {
+            if (is_transition_done(&game->combat_state)) turn_tick(game, dt);
+        } break;
+
+        case COMBAT_STATE_PLAYER_PLANNING:
+        {
+            if (is_transition_done(&game->combat_state)) {
+                if (IsKeyPressed('P')) {
+                    if (game->player.action_count > 0) {
+                        set_next_state(&game->combat_state, COMBAT_STATE_RUNNING_TURN, 2);
+                        game->locked_in_index = game->player.action_count;
+                    }
+                }
+
+                /* Update available action / push scheme */
                 {
-                    deleting_index = i;
-                }
-            }
+                    Rectangle layout = get_available_action_layout();
+                    int selected = -1;
 
-            if (deleting_index != -1 && game->locked_in_index <= deleting_index) {
-                if (deleting_index < (game->player.action_count - 1)) {
-                    memmove(&game->player.actions[deleting_index],
-                            &game->player.actions[deleting_index + 1],
-                            game->player.action_count - deleting_index);
+                    for (int i = 0; i < fz_COUNTOF(base_actions); ++i) {
+                        Rectangle r = get_rowslot_for_nth_tile(layout, i, 1.5, 8);
+                        slot_strength_target[i] = 0.75;
+
+                        if (CheckCollisionPointRec(mouse_pos, r)) {
+                            selected                = i;
+                            slot_strength_target[i] = 1;
+                        }
+                    }
+
+                    if (selected != -1 && IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+                        Action a = base_actions[selected];
+
+                        if (game->player.action_count < ACTION_CAPACITY) {
+                            game->player.actions[game->player.action_count++] = a;
+                        }
+                    }
                 }
-                game->player.action_count -= 1;
+
+                /* Update active action / select & delete scheme */
+                {
+                    Rectangle queued_layout = get_action_queue_layout();
+
+                    int deleting_index = -1;
+                    for (int i = 0; i < game->player.action_count; ++i) {
+                        Rectangle r = get_rowslot_for_nth_tile(queued_layout, i, 1, 8);
+
+                        if (CheckCollisionPointRec(mouse_pos, r) &&
+                            IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+                        {
+                            deleting_index = i;
+                        }
+                    }
+
+                    if (deleting_index != -1 && game->locked_in_index <= deleting_index) {
+                        if (deleting_index < (game->player.action_count - 1)) {
+                            memmove(&game->player.actions[deleting_index],
+                                    &game->player.actions[deleting_index + 1],
+                                    game->player.action_count - deleting_index);
+                        }
+                        game->player.action_count -= 1;
+                    }
+                }
             }
-        }
+        } break;
     }
 }
 
@@ -1051,6 +1055,19 @@ void render_combat_phase_indicator(Game *game) {
     }
 
     {
+        float delta;
+
+        if (game->combat_state.current == COMBAT_STATE_GOING_NEXT_PHASE
+            || game->combat_state.next  == COMBAT_STATE_GOING_NEXT_PHASE)
+        {
+            delta = state_delta(&game->combat_state);
+        }
+        else
+        {
+            delta = 1;
+        }
+
+        Color c = Fade(WHITE, delta);
         const char *text = TextFormat("Phase %d / %d", game->chain_index + 1, count);
 
         float x = render_size.width * 0.5;
@@ -1059,14 +1076,11 @@ void render_combat_phase_indicator(Game *game) {
         Vector2 pos = { x, y };
         pos = align_text_by(pos, text, TOP, CENTER, TILE * 0.75);
 
-        DrawTextEx(font, text, pos, TILE * 0.75, 0, WHITE);
+        DrawTextEx(font, text, pos, TILE * 0.75, 0, c);
     }
 }
 
 void do_combat_gui(Game *game) {
-    /* TODO: DONT SET THE SHADER HERE!!?!?!? */
-    SetShaderValue(noise_shader, noise_shader_loc.strength_loc, &BASE_SHADER_EFFECT_THRESHOLD, SHADER_UNIFORM_FLOAT);
-
     /* TODO: player position should be moved somewhere else */
     Rectangle player = {};
     player.width  = 1.5 * TILE;
@@ -1107,6 +1121,9 @@ void do_combat_gui(Game *game) {
     /* ======================================================
      * Render Queue.
      */
+    switch(game->combat_state.current) {
+    }
+
     {
         Rectangle layout = get_action_queue_layout();
 
@@ -1178,11 +1195,12 @@ void do_title_gui(Game *game) {
     Vector2 pos = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.65f };
     pos = align_text_by(pos, "Press Enter", MIDDLE, CENTER, TILE);
 
-    DrawTextEx(font, "Press Enter", pos, TILE, 0, WHITE);
+    Color w = Fade(WHITE, state_delta(&game->core_state));
+    DrawTextEx(font, "Press Enter", pos, TILE, 0, w);
 
     if (is_transition_done(&game->core_state)) {
         if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) || IsKeyPressed(KEY_ENTER)) {
-            set_next_state(&game->core_state, STAGE_SELECT, 2.0);
+            set_next_state(&game->core_state, STAGE_SELECT, 0.5);
         }
     }
 }
@@ -1198,23 +1216,28 @@ void do_stage_select_gui(Game *game) {
     rb_reposition_by_pivot(&b, MIDDLE, CENTER);
 
     Rectangle r1 = b.result;
-    int stage_one = do_button_esque(hash("StageOne"), r1, 0, 0, INTERACT_CLICK_RIGHT);
 
+    Color w = Fade(WHITE, state_delta(&game->core_state));
+    int flag = is_transition_done(&game->core_state) 
+        ? (INTERACT_CLICK_LEFT | INTERACT_HOVERING)
+        : (INTERACT_NONE);
+
+    int stage_one = do_button_esque(hash("StageOne"), r1, 0, 0, flag, w);
     {
         Vector2 pivot = position_of_pivot(r1, MIDDLE, CENTER);
         pivot = align_text_by(pivot, "Stage 1", MIDDLE, CENTER, TILE);
 
-        DrawTextEx(font, "Stage 1", pivot, TILE, 0, WHITE);
+        DrawTextEx(font, "Stage 1", pivot, TILE, 0, w);
     }
 
     r1.y += (TILE * 2.5);
     Rectangle r2 = r1;
-    int stage_two = do_button_esque(hash("StageTwo"), r2, 0, 0, INTERACT_CLICK_RIGHT);
+    int stage_two = do_button_esque(hash("StageTwo"), r2, 0, 0, flag, w);
     {
         Vector2 pivot = position_of_pivot(r2, MIDDLE, CENTER);
         pivot = align_text_by(pivot, "Stage 2", MIDDLE, CENTER, TILE);
 
-        DrawTextEx(font, "Stage 2", pivot, TILE, 0, WHITE);
+        DrawTextEx(font, "Stage 2", pivot, TILE, 0, w);
     }
 
     if (is_transition_done(&game->core_state)) {
@@ -1239,6 +1262,8 @@ void do_gui(Game *game) {
     BeginTextureMode(render_tex);
     ClearBackground(BLACK);
     /* Draw loading image */
+    BeginMode2D(game->camera);
+
     {
         Texture2D t = {0};
         if (game->core_state.current == GAME_IN_PROGRESS) {
@@ -1249,8 +1274,6 @@ void do_gui(Game *game) {
         Rectangle dest = render_size;
         draw_texture_sane(t, dest, WHITE);
     }
-
-    BeginMode2D(game->camera);
 
     switch(game->core_state.current) {
         case TITLE_SCREEN:
@@ -1300,11 +1323,11 @@ void do_gui(Game *game) {
 }
 
 int main(void) {
-    void *stack_mem = fz_heapalloc(32 * fz_KB);
+    void *arena_mem = fz_heapalloc(32 * fz_KB);
 
-    fz_StackAlloc stack = {0};
-    fz_stack_init(&stack, stack_mem, 32 * fz_KB);
-    fz_set_temp_allocator(fz_stack_allocator(&stack));
+    fz_Arena arena = {0};
+    fz_arena_init(&arena, arena_mem, 32 * fz_KB);
+    fz_set_temp_allocator(fz_arena_allocator(&arena));
 
     InitWindow(window_size.width, window_size.height, "MainWindow");
     noise_shader       = LoadShader(0, "assets/shaders/noise_shader.fs");
@@ -1318,6 +1341,7 @@ int main(void) {
     font = LoadFontEx("assets/fonts/EBGaramond-Regular.ttf", TILE, 0, 0);
 
     render_tex = LoadRenderTexture(render_size.width, render_size.height);
+    SetTextureFilter(render_tex.texture, TEXTURE_FILTER_POINT);
 
     float a = 1;
     SetShaderValue(fade_inout_shader, fade_inout_shader_loc.strength_loc, &a, SHADER_UNIFORM_FLOAT);
@@ -1355,6 +1379,8 @@ int main(void) {
     accumulator = 0;
 
     while(!WindowShouldClose()) {
+        fz_Temp_Memory t = fz_begin_temp(&arena);
+
         float dtime  = GetFrameTime();
         accumulator += dtime;
 
@@ -1378,6 +1404,8 @@ int main(void) {
         EndShaderMode();
         draw_debug_information(&game);
         EndDrawing();
+
+        fz_end_temp(t);
     }
 
     for (int i = 0; i < fz_COUNTOF(art_assets); ++i) {
@@ -1399,6 +1427,6 @@ int main(void) {
     UnloadShader(fade_inout_shader);
     CloseWindow();
 
-    fz_heapfree(stack_mem);
+    fz_heapfree(arena_mem);
     return 0;
 }

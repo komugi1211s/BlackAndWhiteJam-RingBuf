@@ -22,6 +22,6 @@ void main() {
     float th = bayer[y][x] / 255.0f;
     float c = ceil(b-th);
 
-    finalColor = vec4(c, c, c, 1);
+    finalColor = vec4(c, c, c, t.a);
 }
 
