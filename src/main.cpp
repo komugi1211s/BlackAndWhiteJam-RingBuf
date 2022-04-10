@@ -8,7 +8,6 @@
 
 /* Constants */
 const float CHARACTER_Y_POSITION_FROM_TOP = 0.5;
-const float BASE_SHADER_EFFECT_THRESHOLD = 0.5;
 #define TILE 80
 
 fz_STATIC_ASSERT(TILE % 2 == 0);
@@ -47,6 +46,7 @@ enum /* Asset state */
             ASSET_PLAYER_EVADE,
             ASSET_PLAYER_PARRY,
             ASSET_PLAYER_TACKLE,
+            ASSET_PLAYER_DIED,
         ASSET_PLAYER_END,
 
         /* Skill Icons */
@@ -159,7 +159,7 @@ int get_sound(int position, Sound *write_into) {
     return wrapper->is_loaded;
 }
 
-#define ENEMY_CAPACITY 3
+#define ENEMY_CAPACITY 5
 
 /* ============================================================
  *  Game Data And Core Structure.
@@ -170,6 +170,8 @@ enum /* Core scene phase */
     TITLE_SCREEN,
     STAGE_SELECT,
     STAGE_LOADING,
+    GAME_OVER,
+    GAME_CLEAR,
     GAME_IN_PROGRESS,
     GAME_STATE_COUNT,
 };
@@ -178,11 +180,14 @@ const char *game_state_to_char[GAME_STATE_COUNT] = {
     "Title Screen",
     "Stage Select",
     "Stage Loading",
+    "Game Over",
+    "Game Clear",
     "Game In Progress",
 };
 
 enum /* Combat State */
 {
+    COMBAT_STATE_NONE,
     COMBAT_STATE_BEGIN,
     COMBAT_STATE_PLAYER_PLANNING,
     COMBAT_STATE_RUNNING_TURN,
@@ -194,6 +199,7 @@ enum /* Combat State */
 };
 
 const char *combat_state_to_char[COMBAT_STATE_COUNT] = {
+    "None",
     "Begin",
     "Player Planning",
     "Running Turn",
@@ -293,8 +299,10 @@ struct Game {
     int last_player_action;
     int last_enemy_action;
 
-    float  player_hit_highlight_dt;    
-    float  enemy_hit_highlight_dt;    
+    float  player_hit_highlight_dt;
+    float  enemy_hit_highlight_dt;
+
+    int reset_count;
 
     int enemy_index;
     int chain_index;
@@ -504,7 +512,9 @@ void reset_combatstate(Game *game) {
     game->locked_in_index = -1;
     game->enemy_index = 0;
     game->chain_index = 0;
+    game->reset_count = 3;
     game->player.health = game->player.max_health = 5;
+    game->player.action_count = 0;
 
     VecClear(game->enemies);
 }
@@ -520,21 +530,16 @@ void load_stage_one(Game *game) {
         chain.enemies[0].health = chain.enemies[0].max_health = 3;
         chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_SLASH;
         chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_PARRY;
-        chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_TACKLE;
-        chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_PARRY;
 
         chain.enemy_count++;
         chain.enemies[1].health = chain.enemies[1].max_health = 3;
-        chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_EVADE;
         chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_SLASH;
-        chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_PARRY;
-        chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_PARRY;
+        chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_EVADE;
 
         chain.enemy_count++;
         chain.enemies[2].health = chain.enemies[2].max_health = 3;
         chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_TACKLE;
         chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_SLASH;
-        chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_EVADE;
         chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_EVADE;
 
         VecPush(game->enemies, chain);
@@ -563,6 +568,47 @@ void load_stage_one(Game *game) {
         chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_SLASH;
         chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_EVADE;
         chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_EVADE;
+
+        chain.enemy_count++;
+        chain.enemies[3].health = chain.enemies[3].max_health = 3;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_EVADE;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_PARRY;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_TACKLE;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_TACKLE;
+
+        VecPush(game->enemies, chain);
+    }
+
+    {
+        Enemy_Chain chain = {0};
+
+        /* Second wave */
+        chain.enemies[0].health = chain.enemies[0].max_health = 3;
+        chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_SLASH;
+        chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_PARRY;
+        chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_TACKLE;
+        chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_PARRY;
+
+        chain.enemy_count++;
+        chain.enemies[1].health = chain.enemies[1].max_health = 3;
+        chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_EVADE;
+        chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_SLASH;
+        chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_PARRY;
+        chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_PARRY;
+
+        chain.enemy_count++;
+        chain.enemies[2].health = chain.enemies[2].max_health = 3;
+        chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_TACKLE;
+        chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_SLASH;
+        chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_EVADE;
+        chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_EVADE;
+
+        chain.enemy_count++;
+        chain.enemies[3].health = chain.enemies[3].max_health = 3;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_EVADE;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_PARRY;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_TACKLE;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_TACKLE;
 
         VecPush(game->enemies, chain);
     }
@@ -843,7 +889,7 @@ void turn_tick(Game *game, float dt) {
             return;
         }
 
-        if (game->chain_index == VecLen(game->enemies)) { 
+        if (game->chain_index == VecLen(game->enemies)) {
             set_next_state(&game->combat_state, COMBAT_STATE_STAGE_COMPLETE, 1);
             return;
         }
@@ -852,12 +898,8 @@ void turn_tick(Game *game, float dt) {
         Actor *enemy = &chain->enemies[game->enemy_index];
 
         if (enemy->health <= 0) { // Progress to next enemy then break
-            game->enemy_index++;
-
-            if (game->enemy_index == chain->enemy_count) {
+            if ((game->enemy_index + 1) == chain->enemy_count) {
                 set_next_state(&game->combat_state, COMBAT_STATE_GOING_NEXT_PHASE, 1.0);
-                game->chain_index++;
-                game->enemy_index = 0;
             } else {
                 set_next_state(&game->combat_state, COMBAT_STATE_ENEMY_DIED, 0.25);
             }
@@ -1067,19 +1109,70 @@ void update(Game *game, float dt) {
 
             case COMBAT_STATE_GOING_NEXT_PHASE:
             {
-                if (is_transition_done(&game->combat_state))
+                if (is_transition_done(&game->combat_state)) {
+                    if (game->chain_index <= VecLen(game->enemies)) {
+                        game->chain_index++;
+                        game->enemy_index = 0;
+                    } else {
+                        set_next_state(&game->combat_state, COMBAT_STATE_STAGE_COMPLETE, 0.01);
+                    }
                     set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 0.25);
+                }
+            } break;
+
+            case COMBAT_STATE_PLAYER_PLANNING:
+            {
+                if (is_transition_done(&game->combat_state)) {
+                    if(IsKeyPressed('H')) {
+                        game->player.health = 0;
+                        set_next_state(&game->combat_state, COMBAT_STATE_RUNNING_TURN, 0.25);
+                    }
+                    else if(IsKeyPressed('S')) {
+                        game->chain_index = VecLen(game->enemies);
+                        set_next_state(&game->combat_state, COMBAT_STATE_RUNNING_TURN, 0.25);
+                    }
+                    else if(IsKeyPressed('I')) {
+                        Enemy_Chain *chain = &game->enemies[game->chain_index];
+                        for (int i = 0; i < chain->enemy_count; ++i) {
+                            chain->enemies[i].health = 0;
+                        }
+                        set_next_state(&game->combat_state, COMBAT_STATE_RUNNING_TURN, 0.25);
+                    }
+                }
             } break;
 
             case COMBAT_STATE_ENEMY_DIED:
             {
-                if (is_transition_done(&game->combat_state))
+                if (is_transition_done(&game->combat_state)) {
+                    Enemy_Chain *current = &game->enemies[game->chain_index];
+                    if ((game->enemy_index + 1) < current->enemy_count) {
+                        game->enemy_index++;
+                    } else {
+                        set_next_state(&game->combat_state, COMBAT_STATE_GOING_NEXT_PHASE, 0.05);
+                    }
                     set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 0.25);
+                }
             } break;
 
             case COMBAT_STATE_RUNNING_TURN:
             {
-                if (is_transition_done(&game->combat_state)) turn_tick(game, dt);
+                if (is_transition_done(&game->combat_state)) {
+                    turn_tick(game, dt);
+                }
+            } break;
+
+            case COMBAT_STATE_PLAYER_DIED:
+            {
+                if (is_transition_done(&game->combat_state)) {
+                    set_next_state(&game->core_state, GAME_OVER, 1.0);
+                }
+            } break;
+
+            case COMBAT_STATE_STAGE_COMPLETE:
+            {
+                if (is_transition_done(&game->combat_state)) {
+                    set_next_state(&game->core_state, GAME_CLEAR, 1.0);
+                }
             } break;
         }
     }
@@ -1171,7 +1264,6 @@ void render_action_queue(Actor *actor, Rectangle actor_rect) {
         queue.x += action_size.x + 2;
     }
 
-    float queue_width = (action_size.x + 4) * actor->action_count;
 }
 
 
@@ -1191,7 +1283,7 @@ void render_combat_phase_indicator(Game *game) {
     int count = (int)VecLen(game->enemies);
     float gap_between    = TILE * 1.5;
     float indicator_size = 24; /* px */
-    float fullwidth      = count * indicator_size + (count - 1) * gap_between;
+    float fullwidth = count * indicator_size + (count - 1) * gap_between;
     x -= fullwidth * 0.5;
 
     for (int i = 0; i < count; ++i) {
@@ -1223,17 +1315,17 @@ void render_player(Game *game) {
 
     int texture_id = ASSET_PLAYER_STANDING;
 
-    if (game->player.health <= 0) { 
-        // Problem
-    }
-
-    switch(game->last_player_action) {
-        case ACTION_SLASH:  texture_id = ASSET_PLAYER_SLASH;  break;
-        case ACTION_EVADE:  texture_id = ASSET_PLAYER_EVADE;  break;
-        case ACTION_PARRY:  texture_id = ASSET_PLAYER_PARRY;  break;
-        case ACTION_TACKLE: texture_id = ASSET_PLAYER_TACKLE; break;
-        default:
-            texture_id = ASSET_PLAYER_STANDING;
+    if (game->player.health <= 0) {
+        texture_id = ASSET_PLAYER_DIED;
+    } else {
+        switch(game->last_player_action) {
+            case ACTION_SLASH:  texture_id = ASSET_PLAYER_SLASH;  break;
+            case ACTION_EVADE:  texture_id = ASSET_PLAYER_EVADE;  break;
+            case ACTION_PARRY:  texture_id = ASSET_PLAYER_PARRY;  break;
+            case ACTION_TACKLE: texture_id = ASSET_PLAYER_TACKLE; break;
+            default:
+                texture_id = ASSET_PLAYER_STANDING;
+        }
     }
 
     Color c = WHITE;
@@ -1277,6 +1369,54 @@ void do_combat_gui(Game *game) {
         }
     }
 
+    float state_activeness = state_delta(&game->combat_state);
+    switch(game->combat_state.current) {
+        case COMBAT_STATE_BEGIN:
+        {
+            Vector2 r = {
+                render_size.width * 0.5f,
+                render_size.height * 0.5f
+            };
+
+            Color c = Fade(BLACK, state_activeness);
+            Vector2 pos = align_text_by(r, "BEGIN", MIDDLE, CENTER, TILE);
+            DrawTextEx(font, "BEGIN", pos, TILE, 0, c);
+        } break;
+
+        case COMBAT_STATE_GOING_NEXT_PHASE:
+        {
+            Vector2 r = {
+                render_size.width * 0.5f,
+                render_size.height * 0.5f
+            };
+
+            Color c = Fade(BLACK, state_activeness);
+            const char *format = TextFormat("Phase %d", game->chain_index + 1);
+            Vector2 pos = align_text_by(r, format, MIDDLE, CENTER, TILE);
+            DrawTextEx(font, format, pos, TILE, 0, c);
+        } break;
+
+        case COMBAT_STATE_ENEMY_DIED:
+        {
+        } break;
+
+        case COMBAT_STATE_PLAYER_DIED:
+        {
+            Vector2 r = {
+                render_size.width * 0.5f,
+                render_size.height * 0.5f
+            };
+
+            Color c = Fade(BLACK, state_activeness);
+            Vector2 pos = align_text_by(r, "You're killed", MIDDLE, CENTER, TILE);
+            DrawTextEx(font, "You're killed", pos, TILE, 0, c);
+        } break;
+
+        case COMBAT_STATE_RUNNING_TURN:
+        {
+        } break;
+    }
+
     /* ======================================================
      * Render Queue.
      */
@@ -1284,7 +1424,6 @@ void do_combat_gui(Game *game) {
     usable_button_activeness = 0.5 + (usable_button_activeness * usable_button_activeness * 0.5);
     {
         Rectangle layout = get_action_queue_layout();
-        Color fg = Fade(WHITE, usable_button_activeness);
 
         {
             Vector2 play_button_size = v2tile(3, 1);
@@ -1333,7 +1472,7 @@ void do_combat_gui(Game *game) {
 
         for (int i = 0; i < ACTION_CAPACITY; ++i) {
             Rectangle r = get_rowslot_for_nth_tile(layout, i, 1, 8);
-            float bg_activeness = (i < game->locked_in_index) ? 1 : 0.75;
+            float bg_activeness = (i < game->locked_in_index) ? 0.75 : 1;
             float fg_activeness = usable_button_activeness;
 
             Action *a = 0;
@@ -1353,18 +1492,47 @@ void do_combat_gui(Game *game) {
             }
         }
 
+        Vector2 reset = {
+            queued_layout.x + queued_layout.width + TILE * 2,
+            queued_layout.y
+        };
+
+        Vector2 size = { TILE * 2, queued_layout.height };
+        Rectangle r = rectv2(reset, size);
+
+        int   flag = 0;
+        float reset_button_alpha = 0.5;
+        if (game->combat_state.current == COMBAT_STATE_PLAYER_PLANNING
+            && is_transition_done(&game->combat_state)
+            && game->reset_count > 0
+            && game->locked_in_index > -1)
+        {
+            flag = INTERACT_HOVERING | INTERACT_CLICK_LEFT;
+            reset_button_alpha = 1;
+        }
+
+        const char *text = TextFormat("Reset (%d)", game->reset_count);
+        int reset_has_been_pressed = do_button_esque(hash("Reset"), r, text, TILE * 0.75, flag, Fade(WHITE, reset_button_alpha));
+
         if (game->combat_state.current == COMBAT_STATE_PLAYER_PLANNING
             && is_transition_done(&game->combat_state))
         {
+            if (reset_has_been_pressed & INTERACT_CLICK_LEFT) {
+                game->locked_in_index = -1;
+                game->player.action_count = 0;
+                game->reset_count--;
+            }
+
             if (deleting != -1 && game->locked_in_index <= deleting) {
-                Vector2 p = position_of_pivot(queued_layout, TOP, CENTER);
                 int action_type  = game->player.actions[deleting].type;
                 const char *name = action_type_to_name_char[action_type];
-                
+ 
                 const char *text = TextFormat("Remove %s", name);
-                p = align_text_by(p, text, MIDDLE, CENTER, TILE * 0.5);
+                Vector2 size = Vector2Add(MeasureTextEx(font, text, TILE * 0.75, 0), {10, 10});
+                Vector2 pos = mouse_pos;
 
-                DrawTextEx(font, text, p, TILE*0.5, 0, WHITE);
+                DrawRectangleRec(rectv2(pos, size), Fade(BLACK, 0.5));
+                DrawTextEx(font, text, Vector2Add(pos, { 5, 5 }), TILE*0.75, 0, WHITE);
 
                 if (last_deleting_index != deleting) {
                     Sound s;
@@ -1416,6 +1584,7 @@ void do_combat_gui(Game *game) {
             }
         }
 
+
         if (game->combat_state.current == COMBAT_STATE_PLAYER_PLANNING
             && is_transition_done(&game->combat_state)) {
             if (selected != -1) {
@@ -1445,10 +1614,14 @@ void do_combat_gui(Game *game) {
 
 void do_title_gui(Game *game) {
     Rectangle render_rect = render_size;
+    Color w = Fade(WHITE, state_delta(&game->core_state));
+
+    Vector2 title = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.35f };
+    title = align_text_by(title, "Ring Buffer", MIDDLE, CENTER, TILE * 3);
+    DrawTextEx(font, "Ring Buffer", title, TILE * 3, 0, w);
+
     Vector2 pos = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.65f };
     pos = align_text_by(pos, "Press Enter", MIDDLE, CENTER, TILE);
-
-    Color w = Fade(WHITE, state_delta(&game->core_state));
     DrawTextEx(font, "Press Enter", pos, TILE, 0, w);
 
     if (is_transition_done(&game->core_state)) {
@@ -1525,6 +1698,7 @@ void do_stage_select_gui(Game *game) {
         if (stage_one & INTERACT_CLICK_LEFT) {
             load_stage_one(game);
             set_next_state(&game->core_state, GAME_IN_PROGRESS, 5.0);
+            set_next_state(&game->combat_state, COMBAT_STATE_BEGIN, 7.0);
         }
     }
 }
@@ -1553,6 +1727,8 @@ void do_gui(Game *game) {
 
     switch(game->core_state.current) {
         case TITLE_SCREEN:
+        case GAME_CLEAR:
+        case GAME_OVER:
         {
             do_title_gui(game);
         } break;
@@ -1627,7 +1803,7 @@ int main(void) {
     game.enemies = VecCreate(Enemy_Chain, 10);
     game.effects = VecCreate(Effect, 32);
     set_next_state(&game.core_state,   TITLE_SCREEN,       0.1);
-    set_next_state(&game.combat_state, COMBAT_STATE_BEGIN, 1);
+    set_next_state(&game.combat_state, COMBAT_STATE_NONE, 1);
 
     game.turn_interval.max = 0.5;
     game.effect_interval.max = 0.10;
@@ -1636,7 +1812,6 @@ int main(void) {
     reset_combatstate(&game);
 
     /* Debug */
-
     load_tex_to_id(ASSET_STAGE_SELECT_BACKGROUND, "assets/images/loading2.png");
     load_tex_to_id(ASSET_COMBAT_BACKGROUND,   "assets/images/background.png");
     load_tex_to_id(ASSET_ACTION_ICON_SLASH,  "assets/images/spinning-sword.png");
@@ -1649,6 +1824,7 @@ int main(void) {
     load_tex_to_id(ASSET_PLAYER_EVADE, "assets/images/player_evade.png");
     load_tex_to_id(ASSET_PLAYER_PARRY, "assets/images/player_parry.png");
     load_tex_to_id(ASSET_PLAYER_TACKLE, "assets/images/player_tackle.png");
+    load_tex_to_id(ASSET_PLAYER_DIED, "assets/images/player_died.png");
 
     load_tex_to_id(ASSET_EFFECT_SPRITE_RECEIVED_SLASH, "assets/images/slash_effect_sprite.png");
 
