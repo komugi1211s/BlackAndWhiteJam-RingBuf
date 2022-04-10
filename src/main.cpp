@@ -741,7 +741,7 @@ int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_
             PlaySoundMulti(s);
         }
 
-        DrawRectangleLinesEx(rect, 4, color);
+        DrawRectangleLinesEx(rect, 8, color);
     } if (result & INTERACT_HOVERING) {
         if (last_hover != id) {
             Sound s;
@@ -752,10 +752,10 @@ int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_
             last_hover = id;
         }
 
-        DrawRectangleLinesEx(rect, 2, color);
+        DrawRectangleLinesEx(rect, 4, color);
     } else {
         if (last_hover == id) last_hover = 0;
-        DrawRectangleLinesEx(rect, 1, color);
+        DrawRectangleLinesEx(rect, 2, color);
     }
 
     if (label) {
@@ -1256,7 +1256,7 @@ void render_action_queue(Actor *actor, Rectangle actor_rect) {
     for (int i = 0; i < actor->action_count; ++i) {
         float bg_activeness = 1;
         float fg_activeness = (i == actor->action_index) ? 1 : 0.75;
-        int   thickness     = (i == actor->action_index) ? 2 : 1;
+        int   thickness     = (i == actor->action_index) ? 4 : 2;
 
         Action *a = &actor->actions[i];
         render_action_icon(a, queue, thickness, bg_activeness, fg_activeness);
@@ -1378,9 +1378,9 @@ void do_combat_gui(Game *game) {
                 render_size.height * 0.5f
             };
 
-            Color c = Fade(BLACK, state_activeness);
-            Vector2 pos = align_text_by(r, "BEGIN", MIDDLE, CENTER, TILE);
-            DrawTextEx(font, "BEGIN", pos, TILE, 0, c);
+            Color c = Fade(WHITE, state_activeness);
+            Vector2 pos = align_text_by(r, "BEGIN", MIDDLE, CENTER, TILE * 1.5);
+            DrawTextEx(font, "BEGIN", pos, TILE * 1.5, 0, c);
         } break;
 
         case COMBAT_STATE_GOING_NEXT_PHASE:
@@ -1390,10 +1390,10 @@ void do_combat_gui(Game *game) {
                 render_size.height * 0.5f
             };
 
-            Color c = Fade(BLACK, state_activeness);
+            Color c = Fade(WHITE, state_activeness);
             const char *format = TextFormat("Phase %d", game->chain_index + 1);
-            Vector2 pos = align_text_by(r, format, MIDDLE, CENTER, TILE);
-            DrawTextEx(font, format, pos, TILE, 0, c);
+            Vector2 pos = align_text_by(r, format, MIDDLE, CENTER, TILE * 1.5);
+            DrawTextEx(font, format, pos, TILE * 1.5, 0, c);
         } break;
 
         case COMBAT_STATE_ENEMY_DIED:
@@ -1407,9 +1407,9 @@ void do_combat_gui(Game *game) {
                 render_size.height * 0.5f
             };
 
-            Color c = Fade(BLACK, state_activeness);
-            Vector2 pos = align_text_by(r, "You're killed", MIDDLE, CENTER, TILE);
-            DrawTextEx(font, "You're killed", pos, TILE, 0, c);
+            Color c = Fade(WHITE, state_activeness);
+            Vector2 pos = align_text_by(r, "You're killed", MIDDLE, CENTER, TILE * 1.5);
+            DrawTextEx(font, "You're killed", pos, TILE * 1.5, 0, c);
         } break;
 
         case COMBAT_STATE_RUNNING_TURN:
