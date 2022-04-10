@@ -20,7 +20,7 @@ void main() {
     int x = int(fragTexCoord.x * vResolution.x) % 4;
     int y = int(fragTexCoord.y * vResolution.y) % 4;
     float th = bayer[y][x] / 255.0f;
-    float c = ceil(b-th);
+    float c = ceil(b-th) * fStrength;
 
     finalColor = vec4(c, c, c, t.a);
 }

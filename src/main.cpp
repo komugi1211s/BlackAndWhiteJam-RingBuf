@@ -32,7 +32,6 @@ static Shader_Loc dither_shader_loc;
 
 static Font   font;
 
-
 enum /* Asset state */
 {
     ASSET_NONE,
@@ -43,15 +42,11 @@ enum /* Asset state */
 
         /* Player / Animations */
         ASSET_PLAYER_BEGIN,
-            ASSET_PLAYER_RESTING,
-            ASSET_PLAYER_WALKING,
-            ASSET_PLAYER_PLANNING,
-            ASSET_PLAYER_ATTACK,
+            ASSET_PLAYER_STANDING,
+            ASSET_PLAYER_SLASH,
             ASSET_PLAYER_EVADE,
-            ASSET_PLAYER_BLOCKING,
-            ASSET_PLAYER_TACKLING,
-            ASSET_PLAYER_INJURED,
-            ASSET_PLAYER_DYING,
+            ASSET_PLAYER_PARRY,
+            ASSET_PLAYER_TACKLE,
         ASSET_PLAYER_END,
 
         /* Skill Icons */
@@ -76,6 +71,7 @@ enum /* Asset state */
         ASSET_SOUND_START_GAME,
         ASSET_SOUND_ACTION_SELECT,
         ASSET_SOUND_ACTION_SUBMIT,
+        ASSET_SOUND_ACTION_LOCKIN,
 
         ASSET_SOUND_SLASH,
         ASSET_SOUND_EVADE,
@@ -99,8 +95,6 @@ struct SoundWrapper {
 Tex2DWrapper art_assets[ASSET_TEXTURE_END - ASSET_TEXTURE_BEGIN];
 SoundWrapper sound_assets[ASSET_SOUND_END - ASSET_SOUND_BEGIN];
 Music        music_assets[ASSET_MUSIC_END - ASSET_MUSIC_BEGIN];
-
-int player_animation_states[ASSET_PLAYER_END - ASSET_PLAYER_BEGIN];
 
 int load_tex_to_id(int position, const char *tex) {
     assert(ASSET_TEXTURE_BEGIN < position && position < ASSET_TEXTURE_END);
@@ -296,6 +290,12 @@ struct Game {
     int locked_in_index;
     Actor player;
 
+    int last_player_action;
+    int last_enemy_action;
+
+    float  player_hit_highlight_dt;    
+    float  enemy_hit_highlight_dt;    
+
     int enemy_index;
     int chain_index;
 
@@ -307,6 +307,7 @@ struct Game {
     Camera2D camera;
     float camerashake_shift_distance;
 };
+
 
 uint32_t hash(const char *c) {
     uint32_t x = 5381;
@@ -465,11 +466,11 @@ Vector2 align_text_by(Vector2 pos, const char *text, int y_align, int x_align, f
 Rectangle get_available_action_layout(void) {
     Rectangle rect = {};
 
-    rect.width  = (TILE * 1.5 - 8) * fz_COUNTOF(base_actions);
-    rect.height = (TILE * 1.5 - 8);
+    rect.width  = (TILE * 1.25 - 8) * fz_COUNTOF(base_actions);
+    rect.height = (TILE * 1.25 - 8);
 
-    rect.x = render_size.width  * 0.5 - (TILE * 1.5) * fz_COUNTOF(base_actions) * 0.5;
-    rect.y = render_size.height * 0.9 - (TILE * 1.5) * 0.5;
+    rect.x = render_size.width  * 0.5 - ((TILE * 1.25) * fz_COUNTOF(base_actions) * 0.5);
+    rect.y = render_size.height * 0.9 - (TILE * 1.25) * 0.5;
 
     return rect;
 }
@@ -673,6 +674,7 @@ enum
     INTERACT_CLICK_RIGHT = 1 << 2,
 };
 
+
 int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_size, int interact_mask, Color color) {
     int result = INTERACT_NONE;
 
@@ -828,10 +830,11 @@ void update_music(Game *game) {
     UpdateMusicStream(music);
 }
 
-
 void turn_tick(Game *game, float dt) {
     if (game->core_state.current != GAME_IN_PROGRESS) return;
     if (interval_tick(&game->turn_interval, dt)) {
+        game->last_enemy_action = 0;
+        game->last_player_action = 0;
         /* Check if player / enemies are allowed to continue fighting. */
         Enemy_Chain *chain = &game->enemies[game->chain_index];
 
@@ -884,24 +887,46 @@ void turn_tick(Game *game, float dt) {
             /* Offensive Maneuver */
             case ACTION_SLASH: switch(enemy_action.type) {
                 case ACTION_PARRY:  /* blocks  */
-                    break;
+                {
+                    Sound s;
+                    if (get_sound(ASSET_SOUND_PARRY, &s)) {
+                        PlaySoundMulti(s);
+                    }
+                } break;
+
 
                 default:
                 {
+                    Sound s;
+                    if (get_sound(ASSET_SOUND_SLASH, &s)) {
+                        PlaySoundMulti(s);
+                    }
                     shake_camera(game, 8);
                     spawn_effect(game, ASSET_EFFECT_SPRITE_RECEIVED_SLASH, enemy_effect_rect);
                     enemy->health -= 1;
+                    game->enemy_hit_highlight_dt = 0.2;
                 } break;
             } break;
 
             case ACTION_TACKLE: switch(enemy_action.type) {
                 case ACTION_EVADE:  /* blocked */
-                    break;
+                {
+                    Sound s;
+                    if (get_sound(ASSET_SOUND_EVADE, &s)) {
+                        PlaySoundMulti(s);
+                    }
+                } break;
 
                 default:
                 {
+                    Sound s;
+                    if (get_sound(ASSET_SOUND_TACKLE, &s)) {
+                        PlaySoundMulti(s);
+                    }
+
                     shake_camera(game, 8);
                     enemy->health -= 1;
+                    game->enemy_hit_highlight_dt = 0.2;
                 } break;
             } break;
 
@@ -913,30 +938,54 @@ void turn_tick(Game *game, float dt) {
             /* Offensive Maneuver */
             case ACTION_SLASH: switch(player_action.type) {
                 case ACTION_PARRY:  /* blocks  */
-                    break;
+                {
+                    Sound s;
+                    if (get_sound(ASSET_SOUND_PARRY, &s)) {
+                        PlaySoundMulti(s);
+                    }
+                } break;
 
                 default:
                 {
+                    Sound s;
+                    if (get_sound(ASSET_SOUND_SLASH, &s)) {
+                        PlaySoundMulti(s);
+                    }
+
                     shake_camera(game, 8);
                     spawn_effect(game, ASSET_EFFECT_SPRITE_RECEIVED_SLASH, player_effect_rect);
                     player->health -= 1;
+                    game->player_hit_highlight_dt = 0.2;
                 } break;
             } break;
 
             case ACTION_TACKLE: switch(player_action.type) {
                 case ACTION_EVADE:  /* blocked */
-                    break;
+                {
+                    Sound s;
+                    if (get_sound(ASSET_SOUND_EVADE, &s)) {
+                        PlaySoundMulti(s);
+                    }
+                } break;
 
                 default:
                 {
+                    Sound s;
+                    if (get_sound(ASSET_SOUND_TACKLE, &s)) {
+                        PlaySoundMulti(s);
+                    }
                     shake_camera(game, 8);
                     player->health -= 1;
+                    game->player_hit_highlight_dt = 0.2;
                 } break;
             } break;
 
             default:
                 break;
         }
+
+        game->last_player_action = player_action.type;
+        game->last_enemy_action  = enemy_action.type;
     }
 }
 
@@ -972,16 +1021,24 @@ void update(Game *game, float dt) {
     mouse_pos.x = m.x * x_ratio;
     mouse_pos.y = m.y * y_ratio;
 
-    /* animate tweens */
-    for (int i = 0; i < fz_COUNTOF(slot_strength); ++i) {
-        float target      = slot_strength_target[i];
-        slot_strength[i] += (target - slot_strength[i]) * 0.05;
-    }
-
     /* animate camera */
     game->camerashake_shift_distance -= dt * 20;
     if (game->camerashake_shift_distance < 0)
         game->camerashake_shift_distance = 0;
+
+    if ((game->turn_interval.current / game->turn_interval.max) > 0.5) {
+        game->last_player_action = -1;
+        game->last_enemy_action = -1;
+    }
+
+    game->player_hit_highlight_dt -= dt;
+    game->enemy_hit_highlight_dt -= dt;
+
+    if (game->player_hit_highlight_dt < 0) game->player_hit_highlight_dt = 0;
+    if (game->enemy_hit_highlight_dt < 0)  game->enemy_hit_highlight_dt = 0;
+
+    float a = 1 + (game->camerashake_shift_distance / 8);
+    SetShaderValue(dither_shader, dither_shader_loc.strength_loc, &a, SHADER_UNIFORM_FLOAT);
 
     /* Update music */
     update_music(game);
@@ -1156,17 +1213,44 @@ void render_combat_phase_indicator(Game *game) {
     }
 }
 
-void do_combat_gui(Game *game) {
-    /* TODO: player position should be moved somewhere else */
+void render_player(Game *game) {
     Rectangle player = {};
-    player.width  = 1.5 * TILE;
-    player.height = 3   * TILE;
+    player.width  = 4.5 * TILE;
+    player.height = 4.5 * TILE;
     player.x = render_tex.texture.width  * 0.25 - (player.width / 2);
     player.y = render_tex.texture.height * CHARACTER_Y_POSITION_FROM_TOP - (player.height / 2);
+    /* TODO: player position should be moved somewhere else */
+
+    int texture_id = ASSET_PLAYER_STANDING;
+
+    if (game->player.health <= 0) { 
+        // Problem
+    }
+
+    switch(game->last_player_action) {
+        case ACTION_SLASH:  texture_id = ASSET_PLAYER_SLASH;  break;
+        case ACTION_EVADE:  texture_id = ASSET_PLAYER_EVADE;  break;
+        case ACTION_PARRY:  texture_id = ASSET_PLAYER_PARRY;  break;
+        case ACTION_TACKLE: texture_id = ASSET_PLAYER_TACKLE; break;
+        default:
+            texture_id = ASSET_PLAYER_STANDING;
+    }
+
+    Color c = WHITE;
+    if (game->player_hit_highlight_dt > 0) {
+        c = Fade(WHITE, 0.5);
+    }
+
+    Texture2D t;
+    if (get_texture(texture_id, &t)) {
+        draw_texture_sane(t, player, c);
+    }
 
     render_healthbar(&game->player, player);
-    DrawRectangleRec(player, WHITE);
+}
 
+void do_combat_gui(Game *game) {
+    render_player(game);
 
     /*  ===========================================
      *  Render Enemy.
@@ -1209,7 +1293,7 @@ void do_combat_gui(Game *game) {
             button.width  = play_button_size.x;
             button.height = play_button_size.y;
             button.x = (render_size.width  * 0.5)  - (play_button_size.x * 0.5);
-            button.y = (render_size.height * 0.7) - (play_button_size.y * 0.5);
+            button.y = (render_size.height * 0.65) - (play_button_size.y * 0.5);
 
             float activeness = usable_button_activeness;
             if (game->player.action_count == 0) {
@@ -1225,10 +1309,12 @@ void do_combat_gui(Game *game) {
             }
             int pressed = do_button_esque(hash("play"), button, "Lock in", TILE * 0.75, flags, Fade(WHITE, activeness));
 
-            if (pressed & INTERACT_HOVERING) {
-            }
-
             if (pressed & INTERACT_CLICK_LEFT) {
+                game->locked_in_index = game->player.action_count;
+                Sound s;
+                if (get_sound(ASSET_SOUND_ACTION_LOCKIN, &s)) {
+                    PlaySoundMulti(s);
+                }
                 set_next_state(&game->combat_state, COMBAT_STATE_RUNNING_TURN, 0.5);
             }
         }
@@ -1316,7 +1402,7 @@ void do_combat_gui(Game *game) {
         int selected = -1;
 
         for (int i = 0; i < fz_COUNTOF(base_actions); ++i) {
-            Rectangle dest = get_rowslot_for_nth_tile(layout, i, 1.5, 8);
+            Rectangle dest = get_rowslot_for_nth_tile(layout, i, 1.25, 8);
             Action *a = (Action *)&base_actions[i];
 
             float bg_activeness = 1;
@@ -1505,7 +1591,7 @@ void do_gui(Game *game) {
         Rectangle dest = e->rect;
 
         Vector2 origin = {0};
-        DrawTexturePro(t, src, dest, origin, 1, BLACK);
+        DrawTexturePro(t, src, dest, origin, 1, WHITE);
     }
 
     EndMode2D();
@@ -1525,7 +1611,12 @@ int main(void) {
     dither_shader = LoadShader(0, "assets/shaders/dither_shader.fs");
     set_shaderloc(&dither_shader, &dither_shader_loc);
 
+    float a = 1;
+    SetShaderValue(dither_shader, dither_shader_loc.strength_loc, &a, SHADER_UNIFORM_FLOAT);
+
     font = LoadFontEx("assets/fonts/EBGaramond-Regular.ttf", TILE, 0, 0);
+    SetTextureFilter(font.texture, TEXTURE_FILTER_BILINEAR);
+
     render_tex = LoadRenderTexture(render_size.width, render_size.height);
 
     for (int i = 0; i < fz_COUNTOF(slot_strength); ++i) {
@@ -1546,12 +1637,18 @@ int main(void) {
 
     /* Debug */
 
-    load_tex_to_id(ASSET_STAGE_SELECT_BACKGROUND, "assets/images/loading.png");
-    load_tex_to_id(ASSET_COMBAT_BACKGROUND,       "assets/images/background.png");
+    load_tex_to_id(ASSET_STAGE_SELECT_BACKGROUND, "assets/images/loading2.png");
+    load_tex_to_id(ASSET_COMBAT_BACKGROUND,   "assets/images/background.png");
     load_tex_to_id(ASSET_ACTION_ICON_SLASH,  "assets/images/spinning-sword.png");
     load_tex_to_id(ASSET_ACTION_ICON_EVADE,  "assets/images/wingfoot.png");
     load_tex_to_id(ASSET_ACTION_ICON_PARRY,  "assets/images/sword-break.png");
     load_tex_to_id(ASSET_ACTION_ICON_TACKLE, "assets/images/shield-bash.png");
+
+    load_tex_to_id(ASSET_PLAYER_STANDING, "assets/images/player_standing.png");
+    load_tex_to_id(ASSET_PLAYER_SLASH, "assets/images/player_slash.png");
+    load_tex_to_id(ASSET_PLAYER_EVADE, "assets/images/player_evade.png");
+    load_tex_to_id(ASSET_PLAYER_PARRY, "assets/images/player_parry.png");
+    load_tex_to_id(ASSET_PLAYER_TACKLE, "assets/images/player_tackle.png");
 
     load_tex_to_id(ASSET_EFFECT_SPRITE_RECEIVED_SLASH, "assets/images/slash_effect_sprite.png");
 
@@ -1562,6 +1659,7 @@ int main(void) {
     load_sound_to_id(ASSET_SOUND_START_GAME, "assets/sounds/start_game.wav");
     load_sound_to_id(ASSET_SOUND_ACTION_SELECT, "assets/sounds/action_selection.wav");
     load_sound_to_id(ASSET_SOUND_ACTION_SUBMIT, "assets/sounds/action_submit.wav");
+    load_sound_to_id(ASSET_SOUND_ACTION_LOCKIN, "assets/sounds/lockin.wav");
 
     load_sound_to_id(ASSET_SOUND_SLASH,  "assets/sounds/slash.wav");
     load_sound_to_id(ASSET_SOUND_EVADE,  "assets/sounds/evade.wav");
