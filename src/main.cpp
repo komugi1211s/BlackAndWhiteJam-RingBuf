@@ -1696,13 +1696,24 @@ void do_title_gui(Game *game) {
     Rectangle render_rect = render_size;
     Color w = Fade(WHITE, state_delta(&game->core_state));
 
-    Vector2 title = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.35f };
-    title = align_text_by(title, "Ring Buffer", MIDDLE, CENTER, TILE * 3);
-    DrawTextEx(font, "Ring Buffer", title, TILE * 3, 0, w);
 
-    Vector2 pos = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.65f };
-    pos = align_text_by(pos, "Press Enter", MIDDLE, CENTER, TILE);
-    DrawTextEx(font, "Press Enter", pos, TILE, 0, w);
+    {
+        Vector2 title = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.35f };
+        title = align_text_by(title, "Ring Buffer", MIDDLE, CENTER, TILE * 3);
+        DrawTextEx(font, "Ring Buffer", title, TILE * 3, 0, w);
+    }
+
+    {
+        Vector2 pos = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.65f };
+        pos = align_text_by(pos, "Press Enter", MIDDLE, CENTER, TILE);
+        DrawTextEx(font, "Press Enter", pos, TILE, 0, w);
+    }
+
+    {
+        Vector2 pos = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.90f };
+        pos = align_text_by(pos, "Fuzzyperson 2022", MIDDLE, CENTER, TILE * 0.5);
+        DrawTextEx(font, "Fuzzyperson 2022", pos, TILE, 0, w);
+    }
 
     if (is_transition_done(&game->core_state)) {
         if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) || IsKeyPressed(KEY_ENTER)) {
@@ -1730,6 +1741,9 @@ void do_game_over_gui(Game *game) {
         "  https://game-icons.net/ -- (for action icons)",
         "  https://opengameart.org/content/background-night -- (for background of combat scene (heavily modified))",
         "  https://opengameart.org/content/weapon-slash-effect -- (for slashing effect)",
+        "  https://opengameart.org/content/earth-impact-magic-effect -- (for impact effect)",
+        "",
+        "Made by Fuzzyperson",
     };
 
     Vector2 text_size = {0};
