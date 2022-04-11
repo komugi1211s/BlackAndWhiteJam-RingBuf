@@ -15,7 +15,6 @@ fz_STATIC_ASSERT(TILE % 2 == 0);
 /* Game globals */
 static Rectangle window_size = { 0, 0, 1280,  720 };
 static Rectangle render_size = { 0, 0, 1920, 1080 };
-static float accumulator = 0;
 static Vector2 mouse_pos = {};
 
 static RenderTexture2D render_tex;
@@ -720,7 +719,6 @@ enum
     INTERACT_CLICK_RIGHT = 1 << 2,
 };
 
-
 int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_size, int interact_mask, Color color) {
     int result = INTERACT_NONE;
 
@@ -1055,8 +1053,6 @@ void effects_tick(Game *game, float dt) {
 }
 
 void update(Game *game, float dt) {
-    while (accumulator > 1)    accumulator -= 1;
-    if (accumulator < 0)       accumulator  = 0;
     float x_ratio = (render_size.width  / window_size.width);
     float y_ratio = (render_size.height / window_size.height);
     Vector2 m = GetMousePosition();
@@ -1181,13 +1177,6 @@ void update(Game *game, float dt) {
 /* ============================================================
  * Rendering / GUI.
  */
-void set_perframe_shader_uniform(Shader shader, Shader_Loc loc) {
-    Rectangle a = render_size;
-    Vector2 screen_size = { a.width, a.height };
-
-    SetShaderValue(shader, loc.resolution_loc, &screen_size, SHADER_UNIFORM_VEC2);
-    SetShaderValue(shader, loc.time_loc,       &accumulator, SHADER_UNIFORM_FLOAT);
-}
 
 void set_shaderloc(Shader *shader, Shader_Loc *shader_loc) {
     shader_loc->time_loc       = GetShaderLocation(*shader, "fTime");
@@ -1267,26 +1256,31 @@ void render_action_queue(Actor *actor, Rectangle actor_rect) {
 }
 
 
-void render_enemy(Actor *enemy, Rectangle rect, int is_active_participant) {
+void render_enemy(Game *game, Actor *enemy, Rectangle rect, int is_active_participant) {
     if (is_active_participant) {
         render_healthbar(enemy, rect);
         render_action_queue(enemy, rect);
     }
 
-    DrawRectangleRec(rect, Fade(WHITE, (is_active_participant) ? 1 : 0.5));
+    Color c = WHITE;
+    if (game->enemy_hit_highlight_dt > 0 || !is_active_participant) {
+        c = Fade(WHITE, 0.5);
+    }
+
+    DrawRectangleRec(rect, c);
 }
 
 void render_combat_phase_indicator(Game *game) {
     float x = render_size.width * 0.5;
     float y = render_size.height * 0.15;
 
-    int count = (int)VecLen(game->enemies);
+    int chain_count = (int)VecLen(game->enemies);
     float gap_between    = TILE * 1.5;
     float indicator_size = 24; /* px */
-    float fullwidth = count * indicator_size + (count - 1) * gap_between;
+    float fullwidth = chain_count * indicator_size + (chain_count - 1) * gap_between;
     x -= fullwidth * 0.5;
 
-    for (int i = 0; i < count; ++i) {
+    for (int i = 0; i < chain_count; ++i) {
         if (i == game->chain_index) {
             DrawCircle(x, y, indicator_size * 0.85, WHITE);
         } else {
@@ -1295,7 +1289,7 @@ void render_combat_phase_indicator(Game *game) {
 
         x += indicator_size;
 
-        if (i < (count - 1)) {
+        if (i < (chain_count - 1)) {
             Vector2 line_begin = { x, y };
             Vector2 line_end   = { x + gap_between, y };
 
@@ -1361,11 +1355,11 @@ void do_combat_gui(Game *game) {
     if (game->enemy_index < chain->enemy_count) {
         Actor *enemy = &chain->enemies[game->enemy_index];
 
-        render_enemy(enemy, b.result, 1);
+        render_enemy(game, enemy, b.result, 1);
         for (int i = game->enemy_index + 1; i < chain->enemy_count; ++i) {
             Actor *enemy = &chain->enemies[i];
             rb_add_position_by(&b, TILE * 3, 0);
-            render_enemy(enemy, b.result, 0);
+            render_enemy(game, enemy, b.result, 0);
         }
     }
 
@@ -1844,14 +1838,12 @@ int main(void) {
 
     load_music_to_id(ASSET_MUSIC_TITLE, "assets/sounds/terrible_loading_screen.wav");
     load_music_to_id(ASSET_MUSIC_COMBAT, "assets/sounds/terrible_combat_bgm.wav");
-    accumulator = 0;
 
 
     while(!WindowShouldClose()) {
         fz_Temp_Memory t = fz_begin_temp(&arena);
 
         float dtime  = GetFrameTime();
-        accumulator += dtime;
 
         Vector2 ws = { window_size.width, window_size.height };
         SetShaderValue(dither_shader, dither_shader_loc.resolution_loc, &ws, SHADER_UNIFORM_VEC2);
