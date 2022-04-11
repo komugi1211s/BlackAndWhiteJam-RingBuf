@@ -7,7 +7,7 @@
 #include "my.h"
 
 /* Constants */
-const float CHARACTER_Y_POSITION_FROM_TOP = 0.5;
+const float CHARACTER_Y_POSITION_FROM_TOP = 0.525;
 #define TILE 80
 
 fz_STATIC_ASSERT(TILE % 2 == 0);
@@ -58,6 +58,9 @@ enum /* Asset state */
 
         ASSET_EFFECT_SPRITE_BEGIN,
             ASSET_EFFECT_SPRITE_RECEIVED_SLASH,
+            ASSET_EFFECT_SPRITE_RECEIVED_TACKLE,
+            ASSET_EFFECT_SPRITE_PARRIED,
+            ASSET_EFFECT_SPRITE_EVADED,
         ASSET_EFFECT_SPRITE_END,
     ASSET_TEXTURE_END,
 
@@ -87,7 +90,7 @@ struct Tex2DWrapper { /* Wrapper for Texture2D -- to really know if the assets a
 };
 
 struct SoundWrapper {
-    int is_loaded;
+    int   is_loaded;
     Sound sound;
 };
 
@@ -248,10 +251,6 @@ const Action base_actions[] = {
     { ACTION_PARRY  },
 };
 
-/* TODO: replace it with other effect strength */
-static float slot_strength[fz_COUNTOF(base_actions)];
-static float slot_strength_target[fz_COUNTOF(base_actions)];
-
 struct Actor {
     int health;
     int max_health;
@@ -297,6 +296,8 @@ struct Game {
 
     int last_player_action;
     int last_enemy_action;
+
+    float flash_strength;
 
     float  player_hit_highlight_dt;
     float  enemy_hit_highlight_dt;
@@ -514,7 +515,6 @@ void reset_combatstate(Game *game) {
     game->reset_count = 3;
     game->player.health = game->player.max_health = 5;
     game->player.action_count = 0;
-
     VecClear(game->enemies);
 }
 
@@ -537,7 +537,8 @@ void load_stage_one(Game *game) {
 
         chain.enemy_count++;
         chain.enemies[2].health = chain.enemies[2].max_health = 3;
-        chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_TACKLE;
+        chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_SLASH;
+        chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_PARRY;
         chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_SLASH;
         chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_EVADE;
 
@@ -615,9 +616,13 @@ void load_stage_one(Game *game) {
 
 void draw_debug_information(Game *game) {
     Vector2 pos = { 10, 10 };
+    DrawTextEx(font, TextFormat("MousePos: %2.0f, %2.0f", mouse_pos.x, mouse_pos.y), pos, 32, 0, YELLOW);
+
+    pos.y += 32;
     DrawTextEx(font, "Game State:", pos, 32, 0, YELLOW);
     pos.y += 32;
     DrawTextEx(font, TextFormat("  Current: %s", game_state_to_char[game->core_state.current]), pos, 32, 0, YELLOW);
+
 
     pos.y += 32;
     DrawTextEx(font, TextFormat("  Next: %s", game_state_to_char[game->core_state.next]), pos, 32, 0, YELLOW);
@@ -694,10 +699,12 @@ void shake_camera(Game *game, int strength) {
 void spawn_effect(Game *game, int effect_id, Rectangle rect) {
     assert(ASSET_EFFECT_SPRITE_BEGIN < effect_id && effect_id < ASSET_EFFECT_SPRITE_END);
     Texture2D tex;
+
     if (!get_texture(effect_id, &tex)) {
         printf("Asset %d is not loaded. cannot spawn effects.\n", effect_id);
         return;
     }
+
     assert(tex.height == 64 && tex.width % 64 == 0);
     int life = (int)(tex.width / 64);
 
@@ -847,7 +854,6 @@ void update_music(Game *game) {
     if (game->current_music_playing == 0) {
         PlayMusicStream(title_music);
         game->current_music_playing = ASSET_MUSIC_TITLE;
-        printf("Playing music.\n");
     }
 
     float fade = state_delta(&game->core_state);
@@ -857,7 +863,6 @@ void update_music(Game *game) {
             PlayMusicStream(combat_music);
 
             game->current_music_playing = ASSET_MUSIC_COMBAT;
-            printf("Changing music.\n");
         }
     } else {
         if (game->current_music_playing == ASSET_MUSIC_COMBAT) {
@@ -865,7 +870,6 @@ void update_music(Game *game) {
             PlayMusicStream(title_music);
 
             game->current_music_playing = ASSET_MUSIC_TITLE;
-            printf("Changing music.\n");
         }
     }
 
@@ -882,13 +886,13 @@ void turn_tick(Game *game, float dt) {
         /* Check if player / enemies are allowed to continue fighting. */
         Enemy_Chain *chain = &game->enemies[game->chain_index];
 
-        if (game->player.health <= 0) { 
+        if (game->player.health <= 0) {
             set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_DIED, 4.0);
             return;
         }
 
         if (game->chain_index == VecLen(game->enemies)) {
-            set_next_state(&game->combat_state, COMBAT_STATE_STAGE_COMPLETE, 1);
+            set_next_state(&game->combat_state, COMBAT_STATE_STAGE_COMPLETE, 4.0);
             return;
         }
 
@@ -897,7 +901,7 @@ void turn_tick(Game *game, float dt) {
 
         if (enemy->health <= 0) { // Progress to next enemy then break
             if ((game->enemy_index + 1) == chain->enemy_count) {
-                set_next_state(&game->combat_state, COMBAT_STATE_GOING_NEXT_PHASE, 1.0);
+                set_next_state(&game->combat_state, COMBAT_STATE_GOING_NEXT_PHASE, 2.0);
             } else {
                 set_next_state(&game->combat_state, COMBAT_STATE_ENEMY_DIED, 0.25);
             }
@@ -916,8 +920,8 @@ void turn_tick(Game *game, float dt) {
 
         Vector2 player_effect_pos;
         Vector2 player_effect_size;
-        player_effect_pos.x = (render_tex.texture.width * 0.25) + TILE * 0.5;
-        player_effect_pos.y = (render_tex.texture.height * CHARACTER_Y_POSITION_FROM_TOP);
+        player_effect_pos.x = (render_tex.texture.width * 0.215);
+        player_effect_pos.y = (render_tex.texture.height * CHARACTER_Y_POSITION_FROM_TOP) - TILE;
         player_effect_size = { TILE * 2, TILE * 2 };
 
         Rectangle enemy_effect_rect  = rectv2(enemy_effect_pos, enemy_effect_size);
@@ -933,7 +937,6 @@ void turn_tick(Game *game, float dt) {
                         PlaySoundMulti(s);
                     }
                 } break;
-
 
                 default:
                 {
@@ -964,6 +967,7 @@ void turn_tick(Game *game, float dt) {
                         PlaySoundMulti(s);
                     }
 
+                    spawn_effect(game, ASSET_EFFECT_SPRITE_RECEIVED_TACKLE, enemy_effect_rect);
                     shake_camera(game, 8);
                     enemy->health -= 1;
                     game->enemy_hit_highlight_dt = 0.2;
@@ -995,6 +999,7 @@ void turn_tick(Game *game, float dt) {
                     shake_camera(game, 8);
                     spawn_effect(game, ASSET_EFFECT_SPRITE_RECEIVED_SLASH, player_effect_rect);
                     player->health -= 1;
+                    game->flash_strength += 0.25;
                     game->player_hit_highlight_dt = 0.2;
                 } break;
             } break;
@@ -1015,7 +1020,9 @@ void turn_tick(Game *game, float dt) {
                         PlaySoundMulti(s);
                     }
                     shake_camera(game, 8);
+                    spawn_effect(game, ASSET_EFFECT_SPRITE_RECEIVED_TACKLE, player_effect_rect);
                     player->health -= 1;
+                    game->flash_strength += 0.25;
                     game->player_hit_highlight_dt = 0.2;
                 } break;
             } break;
@@ -1059,6 +1066,9 @@ void update(Game *game, float dt) {
     mouse_pos.x = m.x * x_ratio;
     mouse_pos.y = m.y * y_ratio;
 
+    game->flash_strength -= 0.1;
+    if (game->flash_strength < 0) game->flash_strength = 0;
+
     /* animate camera */
     game->camerashake_shift_distance -= dt * 20;
     if (game->camerashake_shift_distance < 0)
@@ -1093,9 +1103,11 @@ void update(Game *game, float dt) {
     /* Ticks */
     state_tick(&game->core_state,   dt);
     state_tick(&game->combat_state, dt);
+
     effects_tick(game, dt);
 
     if(game->core_state.current == GAME_IN_PROGRESS) {
+
         switch(game->combat_state.current) {
             case COMBAT_STATE_BEGIN:
             {
@@ -1112,7 +1124,7 @@ void update(Game *game, float dt) {
                     } else {
                         set_next_state(&game->combat_state, COMBAT_STATE_STAGE_COMPLETE, 0.01);
                     }
-                    set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 0.25);
+                    set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 2.0);
                 }
             } break;
 
@@ -1144,7 +1156,7 @@ void update(Game *game, float dt) {
                     if ((game->enemy_index + 1) < current->enemy_count) {
                         game->enemy_index++;
                     } else {
-                        set_next_state(&game->combat_state, COMBAT_STATE_GOING_NEXT_PHASE, 0.05);
+                        set_next_state(&game->combat_state, COMBAT_STATE_GOING_NEXT_PHASE, 0.25);
                     }
                     set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 0.25);
                 }
@@ -1252,14 +1264,16 @@ void render_action_queue(Actor *actor, Rectangle actor_rect) {
 
         queue.x += action_size.x + 2;
     }
-
 }
 
-
 void render_enemy(Game *game, Actor *enemy, Rectangle rect, int is_active_participant) {
+    float push_enemy_x  = (-TILE * game->player_hit_highlight_dt) + (TILE * game->enemy_hit_highlight_dt);
+
     if (is_active_participant) {
         render_healthbar(enemy, rect);
         render_action_queue(enemy, rect);
+
+        rect.x += push_enemy_x;
     }
 
     Color c = WHITE;
@@ -1276,7 +1290,7 @@ void render_combat_phase_indicator(Game *game) {
 
     int chain_count = (int)VecLen(game->enemies);
     float gap_between    = TILE * 1.5;
-    float indicator_size = 24; /* px */
+    float indicator_size = 20; /* px */
     float fullwidth = chain_count * indicator_size + (chain_count - 1) * gap_between;
     x -= fullwidth * 0.5;
 
@@ -1291,20 +1305,15 @@ void render_combat_phase_indicator(Game *game) {
 
         if (i < (chain_count - 1)) {
             Vector2 line_begin = { x, y };
-            Vector2 line_end   = { x + gap_between, y };
+            Vector2 line_end   = { x + gap_between - (indicator_size/2), y };
 
-            DrawLineEx(line_begin, line_end, 8, WHITE);
-            x += gap_between + indicator_size;
+            DrawLineEx(line_begin, line_end, 4, WHITE);
+            x += gap_between + (indicator_size/2);
         }
     }
 }
 
-void render_player(Game *game) {
-    Rectangle player = {};
-    player.width  = 4.5 * TILE;
-    player.height = 4.5 * TILE;
-    player.x = render_tex.texture.width  * 0.25 - (player.width / 2);
-    player.y = render_tex.texture.height * CHARACTER_Y_POSITION_FROM_TOP - (player.height / 2);
+void render_player(Game *game, Rectangle player) {
     /* TODO: player position should be moved somewhere else */
 
     int texture_id = ASSET_PLAYER_STANDING;
@@ -1336,7 +1345,15 @@ void render_player(Game *game) {
 }
 
 void do_combat_gui(Game *game) {
-    render_player(game);
+    float push_player_x = (TILE * game->enemy_hit_highlight_dt) - (TILE * game->player_hit_highlight_dt);
+
+    Rectangle player = {};
+    player.width  = 4.5 * TILE;
+    player.height = 4.5 * TILE;
+    player.x = render_tex.texture.width  * 0.230 - (player.width / 2) + push_player_x;
+    player.y = render_tex.texture.height * CHARACTER_Y_POSITION_FROM_TOP - (player.height / 2);
+
+    render_player(game, player);
 
     /*  ===========================================
      *  Render Enemy.
@@ -1348,7 +1365,7 @@ void do_combat_gui(Game *game) {
     Rect_Builder b = rect_builder(render_size);
 
     Vector2 size = v2tile(1.5, 3.0);
-    rb_set_position_percent(&b, 0.75, 0.5);
+    rb_set_position_percent(&b, 0.775, CHARACTER_Y_POSITION_FROM_TOP);
     rb_set_size_v2(&b, size);
     rb_reposition_by_pivot(&b, MIDDLE, CENTER);
 
@@ -1373,41 +1390,59 @@ void do_combat_gui(Game *game) {
             };
 
             Color c = Fade(WHITE, state_activeness);
-            Vector2 pos = align_text_by(r, "BEGIN", MIDDLE, CENTER, TILE * 1.5);
-            DrawTextEx(font, "BEGIN", pos, TILE * 1.5, 0, c);
+            Vector2 pos = align_text_by(r, "BEGIN", MIDDLE, CENTER, TILE * 2.5);
+            DrawTextEx(font, "BEGIN", pos, TILE * 2.5, 0, c);
         } break;
 
-        case COMBAT_STATE_GOING_NEXT_PHASE:
+        case COMBAT_STATE_PLAYER_PLANNING: /* Nothing */
         {
-            Vector2 r = {
-                render_size.width * 0.5f,
-                render_size.height * 0.5f
-            };
-
-            Color c = Fade(WHITE, state_activeness);
-            const char *format = TextFormat("Phase %d", game->chain_index + 1);
-            Vector2 pos = align_text_by(r, format, MIDDLE, CENTER, TILE * 1.5);
-            DrawTextEx(font, format, pos, TILE * 1.5, 0, c);
         } break;
 
-        case COMBAT_STATE_ENEMY_DIED:
+        case COMBAT_STATE_RUNNING_TURN:  /* Nothing */
         {
         } break;
 
         case COMBAT_STATE_PLAYER_DIED:
         {
             Vector2 r = {
+                render_size.width  * 0.5f,
+                render_size.height * 0.5f
+            };
+
+            Color c = Fade(WHITE, state_activeness);
+            Vector2 pos = align_text_by(r, "You're killed", MIDDLE, CENTER, TILE * 2.5);
+            DrawTextEx(font, "You're killed", pos, TILE * 2.5, 0, c);
+        } break;
+
+        case COMBAT_STATE_ENEMY_DIED:
+        {
+        } break;
+
+        case COMBAT_STATE_GOING_NEXT_PHASE:
+        {
+
+            Vector2 r = {
+                render_size.width  * 0.5f,
+                render_size.height * 0.5f
+            };
+
+            Color c = Fade(WHITE, 1 - state_activeness);
+            const char *format = TextFormat("Phase %d", game->chain_index + 1);
+            Vector2 pos = align_text_by(r, format, MIDDLE, CENTER, TILE * 2.5);
+            DrawTextEx(font, format, pos, TILE * 2.5, 0, c);
+        } break;
+
+        case COMBAT_STATE_STAGE_COMPLETE:
+        {
+            Vector2 r = {
                 render_size.width * 0.5f,
                 render_size.height * 0.5f
             };
 
             Color c = Fade(WHITE, state_activeness);
-            Vector2 pos = align_text_by(r, "You're killed", MIDDLE, CENTER, TILE * 1.5);
-            DrawTextEx(font, "You're killed", pos, TILE * 1.5, 0, c);
-        } break;
-
-        case COMBAT_STATE_RUNNING_TURN:
-        {
+            const char *text = "Stage Complete";
+            Vector2 pos = align_text_by(r, text, MIDDLE, CENTER, TILE * 2.5);
+            DrawTextEx(font, text, pos, TILE * 2.5, 0, c);
         } break;
     }
 
@@ -1466,32 +1501,31 @@ void do_combat_gui(Game *game) {
 
         for (int i = 0; i < ACTION_CAPACITY; ++i) {
             Rectangle r = get_rowslot_for_nth_tile(layout, i, 1, 8);
-            float bg_activeness = (i < game->locked_in_index) ? 0.75 : 1;
-            float fg_activeness = usable_button_activeness;
+            float bg_activeness = (i < game->locked_in_index) ? 0.5 : 1;
+            float fg_activeness = (i < game->locked_in_index) ? 0.5 : 1;
 
             Action *a = 0;
             if (i < game->player.action_count) {
                 a = &game->player.actions[i];
             }
 
-            int line_thickness = 1;
             if (i == game->player.action_index) {
-                line_thickness = 4;
+                DrawCircle(r.x + TILE * 0.5, r.y - TILE * 0.25, 8, WHITE);
             }
-
-            render_action_icon(a, r, line_thickness, bg_activeness, fg_activeness);
+            render_action_icon(a, r, 2, bg_activeness, fg_activeness);
 
             if (CheckCollisionPointRec(mouse_pos, r) && (i < game->player.action_count)) {
                 deleting = i;
             }
         }
 
+        /* Reset Button */
         Vector2 reset = {
             queued_layout.x + queued_layout.width + TILE * 2,
             queued_layout.y
         };
 
-        Vector2 size = { TILE * 2, queued_layout.height };
+        Vector2 size = { TILE * 2.5, queued_layout.height };
         Rectangle r = rectv2(reset, size);
 
         int   flag = 0;
@@ -1508,46 +1542,74 @@ void do_combat_gui(Game *game) {
         const char *text = TextFormat("Reset (%d)", game->reset_count);
         int reset_has_been_pressed = do_button_esque(hash("Reset"), r, text, TILE * 0.75, flag, Fade(WHITE, reset_button_alpha));
 
+        /* Handle interactions */
         if (game->combat_state.current == COMBAT_STATE_PLAYER_PLANNING
             && is_transition_done(&game->combat_state))
         {
+            if (reset_has_been_pressed & INTERACT_HOVERING) {
+                const char *text = TextFormat("Reset current lock-in index (%d use remain)", game->reset_count);
+                Vector2 size = Vector2Add(MeasureTextEx(font, text, TILE * 0.5, 0), { 10, 10 });
+                Vector2 pos  = mouse_pos;
+                pos.y -= size.y;
+
+                DrawRectangleRec(rectv2(pos, size), Fade(BLACK, 0.9));
+                DrawRectangleLinesEx(rectv2(pos, size), 2, WHITE);
+                DrawTextEx(font, text, Vector2Add(pos, { 5, 5 }), TILE * 0.5, 0, WHITE);
+            }
+
             if (reset_has_been_pressed & INTERACT_CLICK_LEFT) {
                 game->locked_in_index = -1;
                 game->player.action_count = 0;
+                game->player.action_index = 0;
+
+                memset(game->player.actions, 0, sizeof(Action) * ACTION_CAPACITY);
+
                 game->reset_count--;
             }
 
-            if (deleting != -1 && game->locked_in_index <= deleting) {
+            if (deleting != -1) {
                 int action_type  = game->player.actions[deleting].type;
                 const char *name = action_type_to_name_char[action_type];
- 
-                const char *text = TextFormat("Remove %s", name);
-                Vector2 size = Vector2Add(MeasureTextEx(font, text, TILE * 0.75, 0), {10, 10});
-                Vector2 pos = mouse_pos;
+                if(game->locked_in_index <= deleting) {
+                    const char *text = TextFormat("Remove %s", name);
+                    Vector2 size = Vector2Add(MeasureTextEx(font, text, TILE * 0.5, 0), {20, 10});
+                    Vector2 pos = mouse_pos;
+                    pos.y -= size.y;
 
-                DrawRectangleRec(rectv2(pos, size), Fade(BLACK, 0.5));
-                DrawTextEx(font, text, Vector2Add(pos, { 5, 5 }), TILE*0.75, 0, WHITE);
+                    DrawRectangleRec(rectv2(pos, size), Fade(BLACK, 0.9));
+                    DrawRectangleLinesEx(rectv2(pos, size), 2, WHITE);
+                    DrawTextEx(font, text, Vector2Add(pos, { 10, 5 }), TILE*0.5, 0, WHITE);
 
-                if (last_deleting_index != deleting) {
-                    Sound s;
-                    if(get_sound(ASSET_SOUND_ACTION_SELECT, &s)) {
-                        PlaySoundMulti(s);
-                    }
-                    last_deleting_index = deleting;
-                }
-
-                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                    Sound s;
-                    if(get_sound(ASSET_SOUND_ACTION_SUBMIT, &s)) {
-                        PlaySoundMulti(s);
+                    if (last_deleting_index != deleting) {
+                        Sound s;
+                        if(get_sound(ASSET_SOUND_ACTION_SELECT, &s)) {
+                            PlaySoundMulti(s);
+                        }
+                        last_deleting_index = deleting;
                     }
 
-                    if (deleting < (game->player.action_count - 1)) {
-                        memmove(&game->player.actions[deleting],
-                                &game->player.actions[deleting + 1],
-                                game->player.action_count - deleting);
+                    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                        Sound s;
+                        if(get_sound(ASSET_SOUND_ACTION_SUBMIT, &s)) {
+                            PlaySoundMulti(s);
+                        }
+
+                        if (deleting < (game->player.action_count - 1)) {
+                            memmove(&game->player.actions[deleting],
+                                    &game->player.actions[deleting + 1],
+                                    game->player.action_count - deleting);
+                        }
+                        game->player.action_count -= 1;
                     }
-                    game->player.action_count -= 1;
+                } else {
+                    const char *text = TextFormat("cannot remove %s: it's locked in.", name);
+                    Vector2 size = Vector2Add(MeasureTextEx(font, text, TILE * 0.5, 0), {20, 10});
+                    Vector2 pos = mouse_pos;
+                    pos.y -= size.y;
+
+                    DrawRectangleRec(rectv2(pos, size), Fade(BLACK, 0.9));
+                    DrawRectangleLinesEx(rectv2(pos, size), 2, WHITE);
+                    DrawTextEx(font, text, Vector2Add(pos, { 10, 5 }), TILE*0.5, 0, WHITE);
                 }
             }
         }
@@ -1573,8 +1635,7 @@ void do_combat_gui(Game *game) {
             render_action_icon(a, dest, 1, bg_activeness, fg_activeness);
 
             if (CheckCollisionPointRec(mouse_pos, dest)) {
-                selected                = i;
-                slot_strength_target[i] = 1;
+                selected = i;
             }
         }
 
@@ -1589,6 +1650,31 @@ void do_combat_gui(Game *game) {
                     }
                     last_selected_index = selected;
                 }
+
+                Action *a = (Action *)&base_actions[selected];
+                const char *title = action_type_to_name_char[a->type];
+                const char *description = action_type_to_description_char[a->type];
+
+                Vector2 title_size = MeasureTextEx(font, title,       TILE * 0.75, 0);
+                Vector2 desc_size  = MeasureTextEx(font, description, TILE * 0.5,  0);
+
+                Rectangle r = {
+                    mouse_pos.x,
+                    mouse_pos.y,
+                    desc_size.x + 20,
+                    title_size.y + desc_size.y + 20
+                };
+                r.y -= r.height;
+
+                Vector2 textpos = Vector2Add(mouse_pos, { 5, 5 });
+                textpos.y -= r.height;
+
+                DrawRectangleRec(r, Fade(BLACK, 0.9));
+                DrawRectangleLinesEx(r, 2, WHITE);
+
+                DrawTextEx(font, title, textpos, TILE * 0.75, 0, WHITE);
+                textpos.y += TILE * 0.75 + 5;
+                DrawTextEx(font, description, textpos, TILE * 0.5, 0, WHITE);
 
                 if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
                     Action a = base_actions[selected];
@@ -1625,6 +1711,91 @@ void do_title_gui(Game *game) {
     }
 }
 
+void do_game_over_gui(Game *game) {
+    Rectangle render_rect = render_size;
+
+    const char *title_killed    = "You've been killed.";
+    const char *title_conquered = "You survived!";
+
+    const char *text[] = {
+        "This game is made for Black and White Jam.",
+        "  Theme: `Loop`",
+        "  Submission time: April 1st 2022 ~ April 12th 2022",
+        "  Total dev time: 6 days",
+        "",
+        "Used framework: ",
+        "  Raylib (for window creation, rendering, asset management, and more)",
+        "",
+        "Used Asset: ",
+        "  https://game-icons.net/ -- (for action icons)",
+        "  https://opengameart.org/content/background-night -- (for background of combat scene (heavily modified))",
+        "  https://opengameart.org/content/weapon-slash-effect -- (for slashing effect)",
+    };
+
+    Vector2 text_size = {0};
+    text_size.x = render_size.width * 0.85;
+
+    text_size.y  = TILE * 1.25; /* For Title */
+    text_size.y += TILE * 0.25;  /* Title margin */
+    text_size.y += TILE * 0.75 * fz_COUNTOF(text);
+
+    Rectangle r = {
+        0,0,
+        text_size.x,
+        text_size.y,
+    };
+
+    r.x = (render_rect.width * 0.5)  - (text_size.x * 0.5);
+    r.y = (render_rect.height * 0.5) - (text_size.y * 0.5);
+
+    Color w = Fade(WHITE, state_delta(&game->core_state));
+
+    DrawRectangleRec(r, BLACK);
+    DrawRectangleLinesEx(r, 2, w);
+
+    Vector2 pos = { r.x + 5, r.y + 2 };
+    if (game->core_state.current == GAME_CLEAR) {
+        DrawTextEx(font, title_conquered, pos, TILE * 1.25, 0, w);
+    } else {
+        DrawTextEx(font, title_killed, pos, TILE * 1.25, 0, w);
+    }
+
+    pos.y += TILE * 1.25;
+    pos.y += TILE * 0.25;
+
+    for(int i = 0; i < fz_COUNTOF(text); ++i) {
+        DrawTextEx(font, text[i], pos, TILE * 0.5, 0, WHITE);
+        pos.y += TILE * 0.5;
+    }
+
+    {
+        Rect_Builder b = rect_builder(render_rect);
+        Vector2 button_size = v2tile(4, 1.5);
+        rb_set_position_percent(&b, 0.5, 0.85);
+        rb_set_size_v2(&b, button_size);
+        rb_reposition_by_pivot(&b, MIDDLE, CENTER);
+        Rectangle r1 = b.result;
+
+        int flag = is_transition_done(&game->core_state)
+            ? (INTERACT_CLICK_LEFT | INTERACT_HOVERING)
+            : (INTERACT_NONE);
+
+        int stage_one = do_button_esque(hash("StageOne"), r1, 0, 0, flag, w);
+        {
+            Vector2 pivot = position_of_pivot(r1, MIDDLE, CENTER);
+            pivot = align_text_by(pivot, "Retry", MIDDLE, CENTER, TILE);
+
+            DrawTextEx(font, "Retry", pivot, TILE, 0, w);
+        }
+
+        if (stage_one & INTERACT_CLICK_LEFT) {
+            load_stage_one(game);
+            set_next_state(&game->core_state, GAME_IN_PROGRESS, 5.0);
+            set_next_state(&game->combat_state, COMBAT_STATE_BEGIN, 7.0);
+        }
+    }
+}
+
 void do_stage_select_gui(Game *game) {
     Rectangle render_rect = render_size;
 
@@ -1642,9 +1813,10 @@ void do_stage_select_gui(Game *game) {
         "",
         "BE CAREFUL: every time you lock in, your character literally LOCKS your decision in place and prevents you from removing in the future.",
         "exhausting every slot in the buffer early will put you into a very difficult position later on.",
-        "plan ahead carefully, prepare for any possible situation, and destroy all enemies without getting hit 5 times!!",
+        "plan ahead carefully, prepare for any possible situation, and destroy all enemies without getting hit 5 times!",
     };
 
+    Color w = Fade(WHITE, state_delta(&game->core_state));
     {
         Vector2 tutorial_size = {0};
         tutorial_size.x = render_size.width * 0.85;
@@ -1660,10 +1832,10 @@ void do_stage_select_gui(Game *game) {
         r.y = (render_rect.height * 0.5) - (tutorial_size.y * 0.5);
 
         DrawRectangleRec(r, BLACK);
-        DrawRectangleLinesEx(r, 2, WHITE);
+        DrawRectangleLinesEx(r, 2, w);
         Vector2 pos = { r.x + 5, r.y + 2 };
         for(int i = 0; i < fz_COUNTOF(text); ++i) {
-            DrawTextEx(font, text[i], pos, TILE * 0.5, 0, WHITE);
+            DrawTextEx(font, text[i], pos, TILE * 0.5, 0, w);
             pos.y += TILE * 0.5;
         }
     }
@@ -1676,7 +1848,6 @@ void do_stage_select_gui(Game *game) {
         rb_reposition_by_pivot(&b, MIDDLE, CENTER);
         Rectangle r1 = b.result;
 
-        Color w = Fade(WHITE, state_delta(&game->core_state));
         int flag = is_transition_done(&game->core_state)
             ? (INTERACT_CLICK_LEFT | INTERACT_HOVERING)
             : (INTERACT_NONE);
@@ -1702,7 +1873,6 @@ int effectsort(const void *a, const void *b) {
 }
 
 void do_gui(Game *game) {
-
     BeginTextureMode(render_tex);
     ClearBackground(BLACK);
     /* Draw loading image */
@@ -1720,9 +1890,13 @@ void do_gui(Game *game) {
     }
 
     switch(game->core_state.current) {
-        case TITLE_SCREEN:
         case GAME_CLEAR:
         case GAME_OVER:
+        {
+            do_game_over_gui(game);
+        } break;
+
+        case TITLE_SCREEN:
         {
             do_title_gui(game);
         } break;
@@ -1789,9 +1963,6 @@ int main(void) {
 
     render_tex = LoadRenderTexture(render_size.width, render_size.height);
 
-    for (int i = 0; i < fz_COUNTOF(slot_strength); ++i) {
-        slot_strength[i] = slot_strength_target[i] = 0.5;
-    }
 
     Game game = {{0}};
     game.enemies = VecCreate(Enemy_Chain, 10);
@@ -1806,7 +1977,7 @@ int main(void) {
     reset_combatstate(&game);
 
     /* Debug */
-    load_tex_to_id(ASSET_STAGE_SELECT_BACKGROUND, "assets/images/loading2.png");
+    load_tex_to_id(ASSET_STAGE_SELECT_BACKGROUND, "assets/images/loading.png");
     load_tex_to_id(ASSET_COMBAT_BACKGROUND,   "assets/images/background.png");
     load_tex_to_id(ASSET_ACTION_ICON_SLASH,  "assets/images/spinning-sword.png");
     load_tex_to_id(ASSET_ACTION_ICON_EVADE,  "assets/images/wingfoot.png");
@@ -1821,6 +1992,7 @@ int main(void) {
     load_tex_to_id(ASSET_PLAYER_DIED, "assets/images/player_died.png");
 
     load_tex_to_id(ASSET_EFFECT_SPRITE_RECEIVED_SLASH, "assets/images/slash_effect_sprite.png");
+    load_tex_to_id(ASSET_EFFECT_SPRITE_RECEIVED_TACKLE, "assets/images/tackle_effect_sprite.png");
 
     load_sound_to_id(ASSET_SOUND_START_GAME, "assets/sounds/start_game.wav");
     load_sound_to_id(ASSET_SOUND_ACTION_SELECT, "assets/sounds/action_selection.wav");
@@ -1839,16 +2011,14 @@ int main(void) {
     load_music_to_id(ASSET_MUSIC_TITLE, "assets/sounds/terrible_loading_screen.wav");
     load_music_to_id(ASSET_MUSIC_COMBAT, "assets/sounds/terrible_combat_bgm.wav");
 
-
     while(!WindowShouldClose()) {
         fz_Temp_Memory t = fz_begin_temp(&arena);
-
-        float dtime  = GetFrameTime();
+        float dt  = GetFrameTime();
 
         Vector2 ws = { window_size.width, window_size.height };
         SetShaderValue(dither_shader, dither_shader_loc.resolution_loc, &ws, SHADER_UNIFORM_VEC2);
 
-        update(&game, dtime);
+        update(&game, dt);
         do_gui(&game);
 
         BeginDrawing();
@@ -1860,6 +2030,7 @@ int main(void) {
             swapped.height *= -1;
             Vector2 offset = {};
             DrawTexturePro(render_tex.texture, swapped, window_size, offset, 0, Fade(WHITE, x));
+            DrawRectangleRec(window_size, Fade(WHITE, game.flash_strength));
         EndShaderMode();
 
         draw_debug_information(&game);
@@ -1881,7 +2052,6 @@ int main(void) {
     for (int i = 0; i < fz_COUNTOF(music_assets); ++i) {
         UnloadMusicStream(music_assets[i]);
     }
-
 
     VecRelease(game.enemies);
     VecRelease(game.effects);
