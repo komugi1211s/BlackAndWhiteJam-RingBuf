@@ -6,12 +6,12 @@ IF NOT EXIST dist (
 )
 
 setlocal
-set COMPILEROPTION=/Zi /MDd /W1 /WX /Fo"./dist/" /Fd"./dist/" 
+set COMPILEROPTION=/O1 /MDd /W1 /WX /Fo"./dist/" /Fd"./dist/"
 set INCLUDES=/I "W:\CppProject\CppLib\RayLib\include"
 
 set LIBPATH=/LIBPATH:"W:\CppProject\CppLib\RayLib\lib"
 set LINK=opengl32.lib raylib.lib user32.lib winmm.lib shell32.lib gdi32.lib
-set LINKOPTION=/INCREMENTAL:NO /pdb:"./dist/" /out:"./dist/main.exe" /NODEFAULTLIB:library /DEBUG:FULL
+set LINKOPTION=/INCREMENTAL:NO /pdb:"./dist/" /out:"./dist/main.exe" /NODEFAULTLIB:library /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup
 
 set FILE=./src/main.cpp
 

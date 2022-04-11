@@ -12,6 +12,8 @@ const float CHARACTER_Y_POSITION_FROM_TOP = 0.525;
 
 fz_STATIC_ASSERT(TILE % 2 == 0);
 
+#define INFINITE_LOOP_FORCEQUIT 50
+
 /* Game globals */
 static Rectangle window_size = { 0, 0, 1280,  720 };
 static Rectangle render_size = { 0, 0, 1920, 1080 };
@@ -79,6 +81,11 @@ enum /* Asset state */
         ASSET_SOUND_EVADE,
         ASSET_SOUND_PARRY,
         ASSET_SOUND_TACKLE,
+
+        ASSET_SOUND_GAME_BEGIN,
+        ASSET_SOUND_PLAYER_DIED,
+        ASSET_SOUND_NEXT_PHASE,
+        ASSET_SOUND_ENEMY_DIED,
     ASSET_SOUND_END,
 
     ASSET_STATE_COUNT,
@@ -290,6 +297,7 @@ struct Game {
 
     Interval turn_interval;
     Interval effect_interval;
+    Interval resetter_interval;
 
     int locked_in_index;
     Actor player;
@@ -302,6 +310,7 @@ struct Game {
     float  player_hit_highlight_dt;
     float  enemy_hit_highlight_dt;
 
+    int infinite_loop_counter;
     int reset_count;
 
     int enemy_index;
@@ -515,6 +524,7 @@ void reset_combatstate(Game *game) {
     game->reset_count = 3;
     game->player.health = game->player.max_health = 5;
     game->player.action_count = 0;
+    game->player.action_index = 0;
     VecClear(game->enemies);
 }
 
@@ -584,13 +594,15 @@ void load_stage_one(Game *game) {
 
         /* Second wave */
         chain.enemies[0].health = chain.enemies[0].max_health = 3;
-        chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_SLASH;
+        chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_PARRY;
         chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_PARRY;
         chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_TACKLE;
-        chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_PARRY;
+        chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_EVADE;
+        chain.enemies[0].actions[chain.enemies[0].action_count++].type = ACTION_EVADE;
 
         chain.enemy_count++;
         chain.enemies[1].health = chain.enemies[1].max_health = 3;
+        chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_EVADE;
         chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_EVADE;
         chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_SLASH;
         chain.enemies[1].actions[chain.enemies[1].action_count++].type = ACTION_PARRY;
@@ -601,14 +613,20 @@ void load_stage_one(Game *game) {
         chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_TACKLE;
         chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_SLASH;
         chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_EVADE;
+        chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_SLASH;
         chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_EVADE;
+        chain.enemies[2].actions[chain.enemies[2].action_count++].type = ACTION_PARRY;
 
         chain.enemy_count++;
         chain.enemies[3].health = chain.enemies[3].max_health = 3;
         chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_EVADE;
         chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_PARRY;
         chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_TACKLE;
-        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_TACKLE;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_EVADE;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_SLASH;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_PARRY;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_SLASH;
+        chain.enemies[3].actions[chain.enemies[3].action_count++].type = ACTION_EVADE;
 
         VecPush(game->enemies, chain);
     }
@@ -815,18 +833,21 @@ float state_delta_against(State *state, int against) {
     return 0;
 }
 
-float state_tick(State *state, float dt) {
+int state_tick(State *state, float dt) {
+    int entered = 0;
+
     if (state->current != state->next) {
         if (state->transition <= 0) {
             state->current = state->next;
             state->transition = state->max_transition;
+            entered = 1;
         }
     }
 
     if (state->transition > 0) state->transition -= dt;
     if (state->transition < 0) state->transition = 0;
 
-    return state_delta(state);
+    return entered;
 }
 
 int interval_tick(Interval *interval, float dt) {
@@ -853,29 +874,83 @@ void update_music(Game *game) {
 
     if (game->current_music_playing == 0) {
         PlayMusicStream(title_music);
+        SeekMusicStream(title_music, 0);
         game->current_music_playing = ASSET_MUSIC_TITLE;
     }
 
     float fade = state_delta(&game->core_state);
     if (game->core_state.current == GAME_IN_PROGRESS) {
-        if (game->current_music_playing == ASSET_MUSIC_TITLE) {
+        if (IsMusicStreamPlaying(title_music)) {
             StopMusicStream(title_music);
-            PlayMusicStream(combat_music);
+        }
 
-            game->current_music_playing = ASSET_MUSIC_COMBAT;
+        if (game->current_music_playing == ASSET_MUSIC_TITLE) {
+            if (game->combat_state.current == COMBAT_STATE_PLAYER_PLANNING &&
+                is_transition_done(&game->combat_state))
+            {
+                PlayMusicStream(combat_music);
+                SeekMusicStream(combat_music, 0);
+                game->current_music_playing = ASSET_MUSIC_COMBAT;
+            }
         }
     } else {
         if (game->current_music_playing == ASSET_MUSIC_COMBAT) {
             StopMusicStream(combat_music);
             PlayMusicStream(title_music);
+            SeekMusicStream(title_music, 0);
 
             game->current_music_playing = ASSET_MUSIC_TITLE;
         }
     }
 
     Music music = music_assets[game->current_music_playing - ASSET_MUSIC_BEGIN];
-    SetMusicVolume(music, fade);
-    UpdateMusicStream(music);
+    if (IsMusicStreamPlaying(music)) {
+        if ((GetMusicTimeLength(music) - GetMusicTimePlayed(music)) < 0.1) {
+            SeekMusicStream(music, 0);
+        }
+        SetMusicVolume(music, fade);
+        UpdateMusicStream(music);
+    }
+}
+
+int combat_state_failsafe(Game *game) {
+    if(game->infinite_loop_counter == INFINITE_LOOP_FORCEQUIT) {
+        set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_DIED, 4.0);
+        printf("Failsafe Triggered: Infinite Loop\n");
+        return 1;
+    }
+
+    if (game->player.health <= 0) {
+        set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_DIED, 4.0);
+        printf("Failsafe Triggered: Player is dead\n");
+        return 1;
+    }
+
+    if (game->chain_index == VecLen(game->enemies)) {
+        set_next_state(&game->combat_state, COMBAT_STATE_STAGE_COMPLETE, 4.0);
+        printf("Failsafe Triggered: Chain is empty\n");
+        return 1;
+    }
+
+    /* Check if player / enemies are allowed to continue fighting. */
+    Enemy_Chain *chain = &game->enemies[game->chain_index];
+
+    if (game->enemy_index == chain->enemy_count) {
+        set_next_state(&game->combat_state, COMBAT_STATE_GOING_NEXT_PHASE, 2.0);
+        printf("Failsafe Triggered: No enemy remains\n");
+        return 1;
+    }
+
+    Actor *player = &game->player;
+    Actor *enemy = &chain->enemies[game->enemy_index];
+
+    if (enemy->health <= 0) { // Progress to next enemy then break
+        set_next_state(&game->combat_state, COMBAT_STATE_ENEMY_DIED, 0.25);
+        printf("Failsafe Triggered: Enemy is 0 health\n");
+        return 1;
+    }
+
+    return 0;
 }
 
 void turn_tick(Game *game, float dt) {
@@ -886,28 +961,8 @@ void turn_tick(Game *game, float dt) {
         /* Check if player / enemies are allowed to continue fighting. */
         Enemy_Chain *chain = &game->enemies[game->chain_index];
 
-        if (game->player.health <= 0) {
-            set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_DIED, 4.0);
-            return;
-        }
-
-        if (game->chain_index == VecLen(game->enemies)) {
-            set_next_state(&game->combat_state, COMBAT_STATE_STAGE_COMPLETE, 4.0);
-            return;
-        }
-
         Actor *player = &game->player;
         Actor *enemy = &chain->enemies[game->enemy_index];
-
-        if (enemy->health <= 0) { // Progress to next enemy then break
-            if ((game->enemy_index + 1) == chain->enemy_count) {
-                set_next_state(&game->combat_state, COMBAT_STATE_GOING_NEXT_PHASE, 2.0);
-            } else {
-                set_next_state(&game->combat_state, COMBAT_STATE_ENEMY_DIED, 0.25);
-            }
-
-            return;
-        }
 
         Action player_action = get_next_action_for(&game->player);
         Action enemy_action  = get_next_action_for(enemy);
@@ -926,6 +981,9 @@ void turn_tick(Game *game, float dt) {
 
         Rectangle enemy_effect_rect  = rectv2(enemy_effect_pos, enemy_effect_size);
         Rectangle player_effect_rect = rectv2(player_effect_pos, player_effect_size);
+
+        int player_prev_health = player->health;
+        int enemy_prev_health  = enemy->health;
 
         switch(player_action.type) {
             /* Offensive Maneuver */
@@ -1033,6 +1091,14 @@ void turn_tick(Game *game, float dt) {
 
         game->last_player_action = player_action.type;
         game->last_enemy_action  = enemy_action.type;
+
+        if (player->health == player_prev_health
+            && enemy->health == enemy_prev_health)
+        {
+            game->infinite_loop_counter++;
+        } else {
+            game->infinite_loop_counter = 0;
+        } 
     }
 }
 
@@ -1074,9 +1140,9 @@ void update(Game *game, float dt) {
     if (game->camerashake_shift_distance < 0)
         game->camerashake_shift_distance = 0;
 
-    if ((game->turn_interval.current / game->turn_interval.max) > 0.5) {
+    if (interval_tick(&game->resetter_interval, dt)) {
         game->last_player_action = -1;
-        game->last_enemy_action = -1;
+        game->last_enemy_action  = -1;
     }
 
     game->player_hit_highlight_dt -= dt;
@@ -1101,24 +1167,38 @@ void update(Game *game, float dt) {
     game->camera.offset = Vector2Scale(game->camera.offset, TILE * 0.1);
 
     /* Ticks */
-    state_tick(&game->core_state,   dt);
-    state_tick(&game->combat_state, dt);
+    state_tick(&game->core_state, dt);
+    int state_swapped = state_tick(&game->combat_state, dt);
 
     effects_tick(game, dt);
 
     if(game->core_state.current == GAME_IN_PROGRESS) {
-
+        /* fail safe stuff. */
         switch(game->combat_state.current) {
             case COMBAT_STATE_BEGIN:
             {
+                if (state_swapped) {
+                    Sound s;
+                    if (get_sound(ASSET_SOUND_GAME_BEGIN, &s)) {
+                        PlaySoundMulti(s);
+                    }
+                }
+
                 if (is_transition_done(&game->combat_state))
                     set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 0.25);
             } break;
 
             case COMBAT_STATE_GOING_NEXT_PHASE:
             {
+                if (state_swapped) {
+                    Sound s;
+                    if (get_sound(ASSET_SOUND_NEXT_PHASE, &s)) {
+                        PlaySoundMulti(s);
+                    }
+                }
+
                 if (is_transition_done(&game->combat_state)) {
-                    if (game->chain_index <= VecLen(game->enemies)) {
+                    if (game->chain_index < VecLen(game->enemies)) {
                         game->chain_index++;
                         game->enemy_index = 0;
                     } else {
@@ -1130,7 +1210,9 @@ void update(Game *game, float dt) {
 
             case COMBAT_STATE_PLAYER_PLANNING:
             {
+                game->infinite_loop_counter = 0;
                 if (is_transition_done(&game->combat_state)) {
+#if 0
                     if(IsKeyPressed('H')) {
                         game->player.health = 0;
                         set_next_state(&game->combat_state, COMBAT_STATE_RUNNING_TURN, 0.25);
@@ -1146,31 +1228,53 @@ void update(Game *game, float dt) {
                         }
                         set_next_state(&game->combat_state, COMBAT_STATE_RUNNING_TURN, 0.25);
                     }
+#endif
+                    combat_state_failsafe(game);
                 }
             } break;
 
             case COMBAT_STATE_ENEMY_DIED:
             {
+                if (state_swapped) {
+                    Sound s;
+                    if (get_sound(ASSET_SOUND_ENEMY_DIED, &s)) {
+                        PlaySoundMulti(s);
+                    }
+                }
+
                 if (is_transition_done(&game->combat_state)) {
                     Enemy_Chain *current = &game->enemies[game->chain_index];
                     if ((game->enemy_index + 1) < current->enemy_count) {
                         game->enemy_index++;
+                        set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 0.25);
                     } else {
-                        set_next_state(&game->combat_state, COMBAT_STATE_GOING_NEXT_PHASE, 0.25);
+                        if ((game->chain_index + 1) < VecLen(game->enemies)) {
+                            set_next_state(&game->combat_state, COMBAT_STATE_GOING_NEXT_PHASE, 1.25);
+                        } else {
+                            set_next_state(&game->combat_state, COMBAT_STATE_STAGE_COMPLETE, 2.25);
+                        }
                     }
-                    set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 0.25);
                 }
             } break;
 
             case COMBAT_STATE_RUNNING_TURN:
             {
                 if (is_transition_done(&game->combat_state)) {
-                    turn_tick(game, dt);
+                    if(!combat_state_failsafe(game)) { /* did not fire the failsafe; safe to continue */
+                        turn_tick(game, dt);
+                    }
                 }
             } break;
 
             case COMBAT_STATE_PLAYER_DIED:
             {
+                if (state_swapped) {
+                    Sound s;
+                    if (get_sound(ASSET_SOUND_PLAYER_DIED, &s)) {
+                        PlaySoundMulti(s);
+                    }
+                }
+
                 if (is_transition_done(&game->combat_state)) {
                     set_next_state(&game->core_state, GAME_OVER, 1.0);
                 }
@@ -1281,7 +1385,32 @@ void render_enemy(Game *game, Actor *enemy, Rectangle rect, int is_active_partic
         c = Fade(WHITE, 0.5);
     }
 
-    DrawRectangleRec(rect, c);
+    int texture_id = ASSET_PLAYER_STANDING;
+
+    if (enemy->health <= 0) {
+        texture_id = ASSET_PLAYER_DIED;
+    } else {
+        if (is_active_participant) {
+            switch(game->last_enemy_action) {
+                case ACTION_SLASH:  texture_id = ASSET_PLAYER_SLASH;  break;
+                case ACTION_EVADE:  texture_id = ASSET_PLAYER_EVADE;  break;
+                case ACTION_PARRY:  texture_id = ASSET_PLAYER_PARRY;  break;
+                case ACTION_TACKLE: texture_id = ASSET_PLAYER_TACKLE; break;
+                default:
+                    texture_id = ASSET_PLAYER_STANDING;
+            }
+        }
+    }
+
+    Texture2D t;
+    if (get_texture(texture_id, &t)) {
+        Rectangle src = { 0.0f, 0.0f, (float)-t.width, (float)t.height };
+
+        Vector2 origin = {0};
+        float   rotation = 0;
+
+        DrawTexturePro(t, src, rect, origin, rotation, c);
+    }
 }
 
 void render_combat_phase_indicator(Game *game) {
@@ -1364,7 +1493,7 @@ void do_combat_gui(Game *game) {
     Enemy_Chain *chain = &game->enemies[game->chain_index];
     Rect_Builder b = rect_builder(render_size);
 
-    Vector2 size = v2tile(1.5, 3.0);
+    Vector2 size = v2tile(4.5, 4.5);
     rb_set_position_percent(&b, 0.775, CHARACTER_Y_POSITION_FROM_TOP);
     rb_set_size_v2(&b, size);
     rb_reposition_by_pivot(&b, MIDDLE, CENTER);
@@ -1373,6 +1502,7 @@ void do_combat_gui(Game *game) {
         Actor *enemy = &chain->enemies[game->enemy_index];
 
         render_enemy(game, enemy, b.result, 1);
+
         for (int i = game->enemy_index + 1; i < chain->enemy_count; ++i) {
             Actor *enemy = &chain->enemies[i];
             rb_add_position_by(&b, TILE * 3, 0);
@@ -1400,6 +1530,36 @@ void do_combat_gui(Game *game) {
 
         case COMBAT_STATE_RUNNING_TURN:  /* Nothing */
         {
+            if (game->infinite_loop_counter > (INFINITE_LOOP_FORCEQUIT / 2)) {
+                Vector2 r = {
+                    render_size.width  * 0.5f,
+                    render_size.height * 0.5f
+                };
+
+                int count = game->infinite_loop_counter - (INFINITE_LOOP_FORCEQUIT / 2);
+                float activeness = (float)(count * 2) / (float)INFINITE_LOOP_FORCEQUIT;
+
+                Color c = Fade(WHITE, activeness);
+                const char *concern = "Are you in infinite loop?";
+                const char *desc = TextFormat("Ironic considering jam's theme, but forcequit will trigger in %d turns.", INFINITE_LOOP_FORCEQUIT - game->infinite_loop_counter);
+
+                Vector2 concern_size = MeasureTextEx(font, concern, TILE * 1.5, 0);
+                Vector2 desc_size    = MeasureTextEx(font, desc,    TILE, 0);
+
+                {
+                    Vector2 pos = r;
+                    pos.x -= concern_size.x * 0.5;
+                    pos.y -= concern_size.y;
+
+                    DrawTextEx(font, concern, pos, TILE * 1.5, 0, c);
+                }
+
+                {
+                    Vector2 pos = r;
+                    pos.x -= desc_size.x * 0.5;
+                    DrawTextEx(font, desc, pos, TILE, 0, c);
+                }
+            }
         } break;
 
         case COMBAT_STATE_PLAYER_DIED:
@@ -1712,7 +1872,7 @@ void do_title_gui(Game *game) {
     {
         Vector2 pos = { (float)render_rect.width * 0.5f, (float)render_rect.height * 0.90f };
         pos = align_text_by(pos, "Fuzzyperson 2022", MIDDLE, CENTER, TILE * 0.5);
-        DrawTextEx(font, "Fuzzyperson 2022", pos, TILE, 0, w);
+        DrawTextEx(font, "Fuzzyperson 2022", pos, TILE * 0.5, 0, w);
     }
 
     if (is_transition_done(&game->core_state)) {
@@ -1734,12 +1894,8 @@ void do_game_over_gui(Game *game) {
         "  Submission time: April 1st 2022 ~ April 12th 2022",
         "  Total dev time: 6 days",
         "",
-        "Used framework: ",
-        "  Raylib (for window creation, rendering, asset management, and more)",
-        "",
         "Used Asset: ",
         "  https://game-icons.net/ -- (for action icons)",
-        "  https://opengameart.org/content/background-night -- (for background of combat scene (heavily modified))",
         "  https://opengameart.org/content/weapon-slash-effect -- (for slashing effect)",
         "  https://opengameart.org/content/earth-impact-magic-effect -- (for impact effect)",
         "",
@@ -1986,6 +2142,7 @@ int main(void) {
 
     game.turn_interval.max = 0.5;
     game.effect_interval.max = 0.10;
+    game.resetter_interval.max = 0.25;
     game.camera.zoom = 1.0;
 
     reset_combatstate(&game);
@@ -2022,6 +2179,11 @@ int main(void) {
     load_sound_to_id(ASSET_SOUND_PARRY,  "assets/sounds/parry.wav");
     load_sound_to_id(ASSET_SOUND_TACKLE, "assets/sounds/tackle.wav");
 
+    load_sound_to_id(ASSET_SOUND_GAME_BEGIN,  "assets/sounds/game_begin.wav");
+    load_sound_to_id(ASSET_SOUND_NEXT_PHASE, "assets/sounds/next_phase.wav");
+    load_sound_to_id(ASSET_SOUND_ENEMY_DIED, "assets/sounds/enemy_died.wav");
+    load_sound_to_id(ASSET_SOUND_PLAYER_DIED, "assets/sounds/player_died.wav");
+
     load_music_to_id(ASSET_MUSIC_TITLE, "assets/sounds/terrible_loading_screen.wav");
     load_music_to_id(ASSET_MUSIC_COMBAT, "assets/sounds/terrible_combat_bgm.wav");
 
@@ -2047,7 +2209,9 @@ int main(void) {
             DrawRectangleRec(window_size, Fade(WHITE, game.flash_strength));
         EndShaderMode();
 
+#if 0
         draw_debug_information(&game);
+#endif
         EndDrawing();
 
         fz_end_temp(t);
