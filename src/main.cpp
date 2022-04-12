@@ -1175,7 +1175,7 @@ void update(Game *game, float dt) {
             {
                 game->infinite_loop_counter = 0;
                 if (is_transition_done(&game->combat_state)) {
-#if 1
+#if 0
                     if(IsKeyPressed('H')) {
                         game->player.health = 0;
                         set_next_state(&game->combat_state, COMBAT_STATE_RUNNING_TURN, 0.25);
@@ -1912,7 +1912,7 @@ void do_game_over_gui(Game *game) {
             ? (INTERACT_CLICK_LEFT | INTERACT_HOVERING)
             : (INTERACT_NONE);
 
-        int stage_one = do_button_esque(hash("StageOne"), r1, 0, 0, flag, w);
+        int stage_one = do_button_esque(hash("Retry"), r1, 0, 0, flag, w);
         {
             Vector2 pivot = position_of_pivot(r1, MIDDLE, CENTER);
             pivot = align_text_by(pivot, "Retry", MIDDLE, CENTER, TILE);
@@ -2078,10 +2078,10 @@ int main(void) {
     InitWindow(window_size.width, window_size.height, "MainWindow");
     InitAudioDevice();
 
-    void *arena_mem = fz_heapalloc(32 * fz_KB);
+    void *arena_mem = fz_heapalloc(16 * fz_KB);
 
     fz_Arena arena = {0};
-    fz_arena_init(&arena, arena_mem, 32 * fz_KB);
+    fz_arena_init(&arena, arena_mem, 16 * fz_KB);
     fz_set_temp_allocator(fz_arena_allocator(&arena));
 
     dither_shader = LoadShader(0, "assets/shaders/dither_shader.fs");
@@ -2170,11 +2170,10 @@ int main(void) {
             DrawRectangleRec(window_size, Fade(WHITE, game.flash_strength));
         EndShaderMode();
 
-#if 1
+#if 0
         draw_debug_information(&game);
 #endif
         EndDrawing();
-
         fz_end_temp(t);
     }
 
