@@ -83,7 +83,6 @@ enum /* Asset state */
         ASSET_SOUND_TACKLE,
 
         ASSET_SOUND_GAME_BEGIN,
-        ASSET_SOUND_PLAYER_DIED,
         ASSET_SOUND_NEXT_PHASE,
         ASSET_SOUND_ENEMY_DIED,
     ASSET_SOUND_END,
@@ -285,7 +284,7 @@ struct Interval {
 
 struct State {
     int current;
-    int next;
+    int entered;
 
     float transition;
     float max_transition;
@@ -458,14 +457,6 @@ Vector2 position_of_pivot(Rectangle rect, int y_axis, int x_axis) {
     }
 
     return result;
-}
-
-/* ===========================================================
- * Get a position of point in rectangle,
- * specified by pivot.
- */
-Vector2 rb_get_point_of(Rect_Builder *b, int y_axis, int x_axis) {
-    return position_of_pivot(b->result, y_axis, x_axis);
 }
 
 /*
@@ -641,10 +632,6 @@ void draw_debug_information(Game *game) {
     pos.y += 32;
     DrawTextEx(font, TextFormat("  Current: %s", game_state_to_char[game->core_state.current]), pos, 32, 0, YELLOW);
 
-
-    pos.y += 32;
-    DrawTextEx(font, TextFormat("  Next: %s", game_state_to_char[game->core_state.next]), pos, 32, 0, YELLOW);
-
     pos.y += 32;
     DrawTextEx(font, TextFormat("  Transition: %2.2f", state_delta(&game->core_state)), pos, 32, 0, YELLOW);
 
@@ -653,9 +640,6 @@ void draw_debug_information(Game *game) {
 
     pos.y += 32;
     DrawTextEx(font, TextFormat("  Current: %s", combat_state_to_char[game->combat_state.current]), pos, 32, 0, YELLOW);
-
-    pos.y += 32;
-    DrawTextEx(font, TextFormat("  Next: %s", combat_state_to_char[game->combat_state.next]), pos, 32, 0, YELLOW);
 
     pos.y += 32;
     DrawTextEx(font, TextFormat("  Transition: %2.2f", state_delta(&game->combat_state)), pos, 32, 0, YELLOW);
@@ -796,53 +780,33 @@ int do_button_esque(uint32_t id, Rectangle rect, const char *label, float label_
 
 
 void set_next_state(State *state, int state_to, float transition_seconds) {
-    if (state->current != state_to && state->next != state_to) {
-        state->next = state_to;
-        state->transition = state->max_transition = (transition_seconds * 0.5);
+    if (state->current != state_to) {
+        state->current = state_to;
+        state->entered = 1;
+        state->transition = state->max_transition = transition_seconds;
     }
 }
 
-int is_transition_done(State *state) {
-    return (state->current == state->next) && (state->transition <= 0);
+inline int is_transition_done(State *state) {
+    return (state->transition <= 0);
 }
 
 float state_delta(State *state) {
-    if (state->current == state->next) { /* Entering */
-        if (state->max_transition == 0) return 1;
-
-        return 1 - (state->transition / state->max_transition);
-    } else { /* Leaving */
-        if (state->max_transition == 0) return 0;
-
-        return (state->transition / state->max_transition);
-    }
+    if (state->max_transition == 0) return 1;
+    return 1 - (state->transition / state->max_transition);
 }
 
 float state_delta_against(State *state, int against) {
     if (state->max_transition == 0) return 0;
-
     if (state->current == against) {
-        if (state->next == against) return 1;
-        else {
-            return (state->transition / state->max_transition);
-        }
-    } else if (state->next == against) {
-        return 1 - (state->transition / state->max_transition);
+        return state_delta(state);
     }
-
     return 0;
 }
 
 int state_tick(State *state, float dt) {
-    int entered = 0;
-
-    if (state->current != state->next) {
-        if (state->transition <= 0) {
-            state->current = state->next;
-            state->transition = state->max_transition;
-            entered = 1;
-        }
-    }
+    int entered = state->entered;
+    state->entered = 0;
 
     if (state->transition > 0) state->transition -= dt;
     if (state->transition < 0) state->transition = 0;
@@ -941,9 +905,7 @@ int combat_state_failsafe(Game *game) {
         return 1;
     }
 
-    Actor *player = &game->player;
     Actor *enemy = &chain->enemies[game->enemy_index];
-
     if (enemy->health <= 0) { // Progress to next enemy then break
         set_next_state(&game->combat_state, COMBAT_STATE_ENEMY_DIED, 0.25);
         printf("Failsafe Triggered: Enemy is 0 health\n");
@@ -1195,13 +1157,14 @@ void update(Game *game, float dt) {
                     if (get_sound(ASSET_SOUND_NEXT_PHASE, &s)) {
                         PlaySoundMulti(s);
                     }
-                }
-
-                if (is_transition_done(&game->combat_state)) {
                     if (game->chain_index < VecLen(game->enemies)) {
                         game->chain_index++;
                         game->enemy_index = 0;
-                    } else {
+                    }
+                }
+
+                if (is_transition_done(&game->combat_state)) {
+                    if (game->enemy_index != 0) {
                         set_next_state(&game->combat_state, COMBAT_STATE_STAGE_COMPLETE, 0.01);
                     }
                     set_next_state(&game->combat_state, COMBAT_STATE_PLAYER_PLANNING, 2.0);
@@ -1212,7 +1175,7 @@ void update(Game *game, float dt) {
             {
                 game->infinite_loop_counter = 0;
                 if (is_transition_done(&game->combat_state)) {
-#if 0
+#if 1
                     if(IsKeyPressed('H')) {
                         game->player.health = 0;
                         set_next_state(&game->combat_state, COMBAT_STATE_RUNNING_TURN, 0.25);
@@ -1270,7 +1233,7 @@ void update(Game *game, float dt) {
             {
                 if (state_swapped) {
                     Sound s;
-                    if (get_sound(ASSET_SOUND_PLAYER_DIED, &s)) {
+                    if (get_sound(ASSET_SOUND_ENEMY_DIED, &s)) {
                         PlaySoundMulti(s);
                     }
                 }
@@ -1580,7 +1543,6 @@ void do_combat_gui(Game *game) {
 
         case COMBAT_STATE_GOING_NEXT_PHASE:
         {
-
             Vector2 r = {
                 render_size.width  * 0.5f,
                 render_size.height * 0.5f
@@ -1960,8 +1922,8 @@ void do_game_over_gui(Game *game) {
 
         if (stage_one & INTERACT_CLICK_LEFT) {
             load_stage_one(game);
-            set_next_state(&game->core_state, GAME_IN_PROGRESS, 5.0);
-            set_next_state(&game->combat_state, COMBAT_STATE_BEGIN, 7.0);
+            set_next_state(&game->core_state, GAME_IN_PROGRESS, 2.5);
+            set_next_state(&game->combat_state, COMBAT_STATE_BEGIN, 3.5);
         }
     }
 }
@@ -2032,8 +1994,8 @@ void do_stage_select_gui(Game *game) {
 
         if (stage_one & INTERACT_CLICK_LEFT) {
             load_stage_one(game);
-            set_next_state(&game->core_state, GAME_IN_PROGRESS, 5.0);
-            set_next_state(&game->combat_state, COMBAT_STATE_BEGIN, 7.0);
+            set_next_state(&game->core_state, GAME_IN_PROGRESS, 2.5);
+            set_next_state(&game->combat_state, COMBAT_STATE_BEGIN, 3.5);
         }
     }
 }
@@ -2137,7 +2099,7 @@ int main(void) {
     Game game = {{0}};
     game.enemies = VecCreate(Enemy_Chain, 10);
     game.effects = VecCreate(Effect, 32);
-    set_next_state(&game.core_state,   TITLE_SCREEN,       0.1);
+    set_next_state(&game.core_state,   TITLE_SCREEN, 0.1);
     set_next_state(&game.combat_state, COMBAT_STATE_NONE, 1);
 
     game.turn_interval.max = 0.5;
@@ -2182,7 +2144,6 @@ int main(void) {
     load_sound_to_id(ASSET_SOUND_GAME_BEGIN,  "assets/sounds/game_begin.wav");
     load_sound_to_id(ASSET_SOUND_NEXT_PHASE, "assets/sounds/next_phase.wav");
     load_sound_to_id(ASSET_SOUND_ENEMY_DIED, "assets/sounds/enemy_died.wav");
-    load_sound_to_id(ASSET_SOUND_PLAYER_DIED, "assets/sounds/player_died.wav");
 
     load_music_to_id(ASSET_MUSIC_TITLE, "assets/sounds/terrible_loading_screen.wav");
     load_music_to_id(ASSET_MUSIC_COMBAT, "assets/sounds/terrible_combat_bgm.wav");
@@ -2209,7 +2170,7 @@ int main(void) {
             DrawRectangleRec(window_size, Fade(WHITE, game.flash_strength));
         EndShaderMode();
 
-#if 0
+#if 1
         draw_debug_information(&game);
 #endif
         EndDrawing();
